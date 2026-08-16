@@ -31,7 +31,9 @@ function createProjectile(
 ): Projectile {
   const angle = angleBetween(origin, target);
   const speed = weaponType === WeaponTypeId.Flamethrower ? 350 : 500;
-  const lifetime = weaponType === WeaponTypeId.Flamethrower ? Math.max(0.3, 0.2 + projectileSize * 0.04) : 2;
+  const lifetime = weaponType === WeaponTypeId.Flamethrower
+    ? Math.max(0.2, (projectileSize * 2.13) / speed)
+    : 2;
   return {
     id: `proj_${nextProjectileId++}`,
     position: { x: origin.x, y: origin.y },

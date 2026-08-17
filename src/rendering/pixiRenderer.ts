@@ -37,7 +37,13 @@ import { ParticleSystem, createGlowTexture } from './particles';
 /* helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-const rgb = (r: number, g: number, b: number): number => ((r << 16) | (g << 8) | b) >>> 0;
+const rgb = (r: number, g: number, b: number): number => {
+  // Canvas 的 rgb() 会自动截断到 0-255；Pixi Color 不截断，溢出会挤进 alpha 位并抛异常
+  const cr = Math.max(0, Math.min(255, r));
+  const cg = Math.max(0, Math.min(255, g));
+  const cb = Math.max(0, Math.min(255, b));
+  return (cr << 16) | (cg << 8) | cb;
+};
 const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
 
     const MONO = 'monospace';
@@ -72,6 +78,11 @@ interface WindWheelSlot {
   gfx: Graphics;
   count: number;
   range: number;
+}
+
+interface SlashGfx {
+  fill: Graphics;
+  arc: Graphics;
 }
 
 interface FlashFx {
@@ -168,7 +179,7 @@ export class PixiRenderer {
   private readonly chests = new Map<string, ChestGfx>();
   private readonly turrets = new Map<string, TurretGfx>();
   private readonly landMines = new Map<string, { gfx: Graphics; armed: boolean }>();
-  private readonly slashes = new Map<string, Graphics>();
+  private readonly slashes = new Map<string, SlashGfx>();
   private readonly beams = new Map<string, Graphics>();
   private readonly damages = new Map<string, Text>();
   private readonly projectiles = new Map<string, Particle>();
@@ -180,6 +191,12 @@ export class PixiRenderer {
 
   // HUD 元素
   private hudBuilt = false;
+  private readonly hudMisc = new Map<string, Graphics>();
+  private readonly hudSlots: Graphics[] = [];
+  private readonly hudSlotNames: Text[] = [];
+  private readonly hudSlotLvs: Text[] = [];
+  private readonly hudRings: Graphics[] = [];
+  private readonly hudBars: Graphics[] = [];
   private readonly hudTexts: { level: Text; hp: Text; kills: Text; invincible: Text } = {
     level: makeText('', FONT_14),
     hp: makeText('', FONT_14),
@@ -199,6 +216,8 @@ export class PixiRenderer {
   private prevLevel = 0;
   private prevHealth = 0;
   private flameAcc = 0;
+  private windTrailAcc = 0;
+  private prevSlashKeys = new Set<string>();
   private menuKey = '';
   private flashes: FlashFx[] = [];
   private shake: ShakeFx | null = null;
@@ -693,29 +712,48 @@ export class PixiRenderer {
   private syncSlashes(effects: SlashEffect[]): void {
     const seen = new Set<string>();
     for (const ef of effects) {
-      const key = `${ef.position.x.toFixed(1)},${ef.position.y.toFixed(1)},${ef.direction.toFixed(2)},${ef.arc.toFixed(2)},${ef.range.toFixed(1)}`;
+      const key = slashKeyOf(ef);
       seen.add(key);
-      let g = this.slashes.get(key);
-      if (!g) {
-        g = new Graphics();
+      let slot = this.slashes.get(key);
+      if (!slot) {
+        slot = { fill: new Graphics(), arc: new Graphics() };
         const startAngle = ef.direction - ef.arc / 2;
         const endAngle = ef.direction + ef.arc / 2;
-        g.moveTo(Math.cos(startAngle) * ef.range, Math.sin(startAngle) * ef.range)
-          .arc(0, 0, ef.range, startAngle, endAngle)
+        const r = ef.range;
+
+        // 填充层：外浅内亮两层扇形刀光
+        slot.fill
+          .moveTo(Math.cos(startAngle) * r, Math.sin(startAngle) * r)
+          .arc(0, 0, r, startAngle, endAngle)
           .lineTo(0, 0)
           .closePath()
-          .fill({ color: 0xc8e6ff, alpha: 0.3 });
-        g.arc(0, 0, ef.range, startAngle, endAngle).stroke({ color: 0xffffff, width: 4 });
-        this.slashes.set(key, g);
-        this.slashC.addChild(g);
+          .fill({ color: 0x7fd8ff, alpha: 0.16 });
+        slot.fill
+          .moveTo(Math.cos(startAngle) * r * 0.55, Math.sin(startAngle) * r * 0.55)
+          .arc(0, 0, r * 0.55, startAngle, endAngle)
+          .lineTo(0, 0)
+          .closePath()
+          .fill({ color: 0xffffff, alpha: 0.12 });
+
+        // 弧线层：外围光晕 + 白色亮核 + 内层纤细刀锋
+        slot.arc.arc(0, 0, r, startAngle, endAngle).stroke({ color: 0x81d4fa, width: 7, alpha: 0.35 });
+        slot.arc.arc(0, 0, r, startAngle, endAngle).stroke({ color: 0xffffff, width: 3.5, alpha: 0.95 });
+        slot.arc.arc(0, 0, r * 0.94, startAngle, endAngle).stroke({ color: 0xe3f7ff, width: 1.5, alpha: 0.9 });
+
+        this.slashes.set(key, slot);
+        this.slashC.addChild(slot.fill, slot.arc);
       }
-      g.position.set(ef.position.x, ef.position.y);
-      g.alpha = clamp01(ef.timer / 0.15);
+      slot.fill.position.set(ef.position.x, ef.position.y);
+      slot.arc.position.set(ef.position.x, ef.position.y);
+      const fade = clamp01(ef.timer / 0.15);
+      slot.fill.alpha = fade;
+      slot.arc.alpha = fade;
     }
-    for (const [key, g] of this.slashes) {
+    for (const [key, slot] of this.slashes) {
       if (!seen.has(key)) {
-        this.slashC.removeChild(g);
-        g.destroy();
+        this.slashC.removeChild(slot.fill, slot.arc);
+        slot.fill.destroy();
+        slot.arc.destroy();
         this.slashes.delete(key);
       }
     }
@@ -761,6 +799,7 @@ export class PixiRenderer {
       const needsRedraw = !slot || slot.count !== count || slot.range !== aux.stats.range;
       if (!slot) {
         slot = { root: new Container(), gfx: new Graphics(), count, range: aux.stats.range };
+        slot.root.addChild(slot.gfx); // 关键：把刀刃图形挂进 root，否则永不显示
         this.windwheels.set(i, slot);
         this.windwheelC.addChild(slot.root);
       }
@@ -906,16 +945,27 @@ export class PixiRenderer {
       }
     }
 
-    // 敌人受击 → 火花
+    // 敌人受击 → 火花（近战强化：更多青白色 + 白闪）
+    const isMelee = WEAPON_CONFIGS[state.character.mainWeapon.typeId].isMelee;
     for (const [id, pe] of this.prevEnemies) {
       const cur = curEnemies.get(id);
       if (cur && cur.health < pe.health - 0.5) {
         this.fx.burst({
-          x: cur.position.x, y: cur.position.y, count: 4,
-          color: 0xffffff, speedMin: 80, speedMax: 200,
-          sizeMin: 1.5, sizeMax: 3, lifeMin: 0.12, lifeMax: 0.3,
-          drag: 0.9, additive: true, alpha: 0.9,
+          x: cur.position.x, y: cur.position.y,
+          count: isMelee ? 9 : 4,
+          color: isMelee ? 0xa9f1ff : 0xffffff,
+          speedMin: isMelee ? 90 : 80, speedMax: isMelee ? 240 : 200,
+          sizeMin: 1.5, sizeMax: isMelee ? 3.5 : 3,
+          lifeMin: 0.12, lifeMax: 0.3,
+          drag: 0.9, additive: true, alpha: 0.95,
         });
+        if (isMelee) {
+          this.fx.burst({
+            x: cur.position.x, y: cur.position.y, count: 5, color: 0xffffff,
+            speedMin: 120, speedMax: 280, sizeMin: 1.2, sizeMax: 2.5,
+            lifeMin: 0.08, lifeMax: 0.18, drag: 0.92, additive: true,
+          });
+        }
       }
     }
 
@@ -971,6 +1021,70 @@ export class PixiRenderer {
       }
     }
 
+    // 旋转飞轮：刀刃沿轨道持续甩出紫色光尘
+    const windWheel = state.character.auxWeapons.find((a) => a.typeId === AuxiliaryWeaponType.WindWheel);
+    if (windWheel) {
+      this.windTrailAcc += dt;
+      const wwCount = Math.max(1, Math.min(Math.floor(windWheel.stats.count), 6));
+      const wwRadius = 80;
+      const interval = 0.045;
+      while (this.windTrailAcc > interval) {
+        this.windTrailAcc -= interval;
+        for (let b = 0; b < wwCount; b += wwCount > 3 ? 2 : 1) {
+          const a = windWheel.rotationAngle + (b / wwCount) * Math.PI * 2;
+          const rad = wwRadius * (0.92 + Math.random() * 0.2);
+          const px = state.character.position.x + Math.cos(a) * rad;
+          const py = state.character.position.y + Math.sin(a) * rad;
+          this.fx.spawn(px, py, {
+            color: Math.random() < 0.5 ? 0xce93d8 : 0x9c27b0,
+            additive: true,
+            speedMin: 5, speedMax: 30,
+            sizeMin: 1.5, sizeMax: 3,
+            lifeMin: 0.3, lifeMax: 0.6,
+            drag: 0.94, alpha: 0.55,
+          });
+        }
+      }
+    }
+
+    // 近战挥砍：弧光出现瞬间，沿弧线甩出刀光粒子 + 刀锋尖端爆闪
+    if (isMelee) {
+      const curSlashKeys = new Set(state.slashEffects.map(slashKeyOf));
+      for (const ef of state.slashEffects) {
+        if (this.prevSlashKeys.has(slashKeyOf(ef))) continue;
+        const bladeColors = [0xffffff, 0xc8e6ff, 0x81d4fa, 0xb3e5fc];
+        for (let i = 0; i < 14; i++) {
+          const t = Math.random();
+          const a = ef.direction - ef.arc / 2 + t * ef.arc;
+          const dist = ef.range * (0.4 + Math.random() * 0.6);
+          // 速度：径向向外 + 少量切向甩动
+          const velAngle = Math.random() < 0.75
+            ? a + (Math.random() - 0.5) * 0.9
+            : a + Math.PI / 2 + (Math.random() - 0.5) * 1.2;
+          this.fx.spawn(
+            ef.position.x + Math.cos(a) * dist,
+            ef.position.y + Math.sin(a) * dist,
+            {
+              color: bladeColors[(Math.random() * bladeColors.length) | 0],
+              additive: true, angle: velAngle, spread: 0.5,
+              speedMin: 40, speedMax: 210,
+              sizeMin: 1.5, sizeMax: 4,
+              lifeMin: 0.12, lifeMax: 0.32,
+              drag: 0.88, alpha: 0.95,
+            },
+          );
+        }
+        // 刀锋方向核心爆闪
+        this.fx.burst({
+          x: ef.position.x + Math.cos(ef.direction) * ef.range * 0.75,
+          y: ef.position.y + Math.sin(ef.direction) * ef.range * 0.75,
+          count: 8, color: 0xffffff, angle: ef.direction, spread: 1.2,
+          speedMin: 140, speedMax: 320, sizeMin: 2, sizeMax: 4,
+          lifeMin: 0.1, lifeMax: 0.22, drag: 0.9, additive: true,
+        });
+      }
+    }
+
     // XP 拾取 → 光点
     const curXp = new Set(state.xpDrops.map((d) => d.id));
     for (const id of this.prevXp) {
@@ -1023,6 +1137,7 @@ export class PixiRenderer {
         this.prevXpData = new Map(state.xpDrops.map((d) => [d.id, d]));
         this.prevLevel = state.character.level;
         this.prevHealth = state.character.health;
+        this.prevSlashKeys = new Set(state.slashEffects.map(slashKeyOf));
         this.flameAcc = 0;
         this.seeded = true;
       } else {
@@ -1039,6 +1154,7 @@ export class PixiRenderer {
     this.prevXpData = new Map(state.xpDrops.map((d) => [d.id, d]));
     this.prevLevel = state.character.level;
     this.prevHealth = state.character.health;
+    this.prevSlashKeys = new Set(state.slashEffects.map(slashKeyOf));
   }
 
   /* ---------------------------------------------------------------- */
@@ -1055,20 +1171,24 @@ export class PixiRenderer {
     // 武器槽（主武器 + 2 个副武器槽）
     for (let i = 0; i < 1 + MAX_AUX_SLOTS; i++) {
       const slot = new Graphics();
-      slot.name = `slot_${i}`;
       this.hudC.addChild(slot);
+      this.hudSlots.push(slot);
 
       const nameTxt = makeText('', { fontFamily: MONO, fontSize: 9, fill: 0x4fc3f7 }, 0, 0.5);
-      nameTxt.name = `slotName_${i}`;
       this.hudC.addChild(nameTxt);
+      this.hudSlotNames.push(nameTxt);
 
       const lvTxt = makeText('', { fontFamily: MONO, fontSize: 8, fill: 0xffeb3b }, 1, 0.5);
-      lvTxt.name = `slotLv_${i}`;
       this.hudC.addChild(lvTxt);
+      this.hudSlotLvs.push(lvTxt);
 
       const reloadRing = new Graphics();
-      reloadRing.name = `slotRing_${i}`;
       this.hudC.addChild(reloadRing);
+      this.hudRings.push(reloadRing);
+
+      const ammoBar = new Graphics();
+      this.hudC.addChild(ammoBar);
+      this.hudBars.push(ammoBar);
     }
     this.hudBuilt = true;
   }
@@ -1120,10 +1240,11 @@ export class PixiRenderer {
     isReloading: boolean, reloadProgress: number, isAux: boolean,
     isEmpty: boolean,
   ): void {
-    const slot = this.hudC.getChildByName(`slot_${index}`) as Graphics;
-    const nameTxt = this.hudC.getChildByName(`slotName_${index}`) as Text;
-    const lvTxt = this.hudC.getChildByName(`slotLv_${index}`) as Text;
-    const ring = this.hudC.getChildByName(`slotRing_${index}`) as Graphics;
+    const slot = this.hudSlots[index];
+    const nameTxt = this.hudSlotNames[index];
+    const lvTxt = this.hudSlotLvs[index];
+    const ring = this.hudRings[index];
+    const barGfx = this.hudBars[index];
 
     if (isEmpty) {
       slot.clear();
@@ -1165,7 +1286,6 @@ export class PixiRenderer {
       ring.visible = false;
     }
 
-    const barGfx = this.getChildGraphics(`slotBar_${index}`);
     barGfx.clear();
     if (!isAux) {
       barGfx.rect(x + 2, y + h - 5, w - 4, 3).fill({ color: 0x333333 });
@@ -1176,20 +1296,15 @@ export class PixiRenderer {
     }
   }
 
-  /** 在 HUD 上按 name 查找或创建一个小 Graphics（弹药条）。 */
-  private getChildGraphics(name: string): Graphics {
-    let g = this.hudC.getChildByName(name) as Graphics | null;
+  /** 在 HUD 上按 key 获取或创建一个小 Graphics（XP 条等）。 */
+  private getOrCreateGfx(key: string): Graphics {
+    let g = this.hudMisc.get(key);
     if (!g) {
       g = new Graphics();
-      g.name = name;
+      this.hudMisc.set(key, g);
       this.hudC.addChild(g);
     }
     return g;
-  }
-
-  /** 在 HUD 上按 name 查找或创建 Graphics（XP 条）。 */
-  private getOrCreateGfx(name: string): Graphics {
-    return this.getChildGraphics(name);
   }
 
   /* ---------------------------------------------------------------- */
@@ -1532,4 +1647,8 @@ function chestLabel(type: ChestType): string {
     default:
       return '';
   }
+}
+
+function slashKeyOf(ef: SlashEffect): string {
+  return `${ef.position.x.toFixed(1)},${ef.position.y.toFixed(1)},${ef.direction.toFixed(2)},${ef.arc.toFixed(2)},${ef.range.toFixed(1)}`;
 }

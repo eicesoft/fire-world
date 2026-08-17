@@ -15,7 +15,7 @@ import {
   MINI_BOSS_KILL_THRESHOLD_BASE,
   MINI_BOSS_KILL_THRESHOLD_GROWTH,
 } from '../src/game/types';
-import { createCharacter, createWeapon, getXpThreshold, getMiniBossKillThreshold } from '../src/game/character';
+import { createCharacter, createWeapon, createAuxiliaryWeapon, getXpThreshold, getMiniBossKillThreshold } from '../src/game/character';
 import { calculateDamage, applyDamage } from '../src/game/combat';
 import { generateUpgradeOptions, applyUpgrade, generateWeaponDropOptions } from '../src/game/upgrades';
 
@@ -170,6 +170,35 @@ describe('Upgrade system', () => {
     const options = generateWeaponDropOptions([]);
     expect(options.length).toBeGreaterThan(0);
     expect(options.length).toBeLessThanOrEqual(3);
+  });
+
+  it('aux upgrade options only offer stats the weapon actually uses', () => {
+    const char = createCharacter(WeaponTypeId.MachineGun);
+    char.auxWeapons.push(createAuxiliaryWeapon(AuxiliaryWeaponType.Missile));
+    const forbidden = new Set(['rotationSpeed', 'duration', 'placementCooldown', 'turretFireRate', 'armTime']);
+    for (let i = 0; i < 300; i++) {
+      for (const opt of generateUpgradeOptions(char)) {
+        if (opt.target === 'aux_weapon') {
+          expect(opt.auxTypeId).toBe(AuxiliaryWeaponType.Missile);
+          expect(forbidden.has(opt.stat as string)).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('wind wheel offers rotation speed upgrades', () => {
+    const char = createCharacter(WeaponTypeId.MachineGun);
+    char.auxWeapons.push(createAuxiliaryWeapon(AuxiliaryWeaponType.WindWheel));
+    let found = false;
+    for (let i = 0; i < 300 && !found; i++) {
+      for (const opt of generateUpgradeOptions(char)) {
+        if (opt.target === 'aux_weapon' && opt.stat === 'rotationSpeed') {
+          found = true;
+          break;
+        }
+      }
+    }
+    expect(found).toBe(true);
   });
 });
 

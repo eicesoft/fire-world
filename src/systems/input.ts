@@ -103,6 +103,19 @@ export function setupInputHandlers(
 
   window.addEventListener('keyup', (e) => {
     input.keys.delete(e.key.toLowerCase());
+    // 复位菜单导航边沿（否则键盘只能左右各走一步）
+    if (e.key === 'ArrowLeft') {
+      input.navLeft = false;
+      input.navLeftConsumed = false;
+    }
+    if (e.key === 'ArrowRight') {
+      input.navRight = false;
+      input.navRightConsumed = false;
+    }
+    if (e.key === 'Enter') {
+      input.aPressed = false;
+      input.aConsumed = false;
+    }
   });
 
   canvas.addEventListener('mousemove', (e) => {

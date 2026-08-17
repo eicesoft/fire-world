@@ -1,14 +1,21 @@
 import { GameState, GamePhase, WeaponTypeId, Vector2, SCREEN_WIDTH, SCREEN_HEIGHT, INITIAL_WEAPON_POOL } from './game/types';
 import { createInitialGameState, updateGame, selectWeapon, handleLevelUpSelect, handleWeaponDropSelect } from './game/gameLoop';
-import { Renderer } from './rendering/renderer';
+import { PixiRenderer } from './rendering/pixiRenderer';
 import { InputState, createInputState, setupInputHandlers, getMovementDirection, updateMouseDirection, pollGamepad } from './systems/input';
 import { distance } from './game/collision';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
-canvas.width = SCREEN_WIDTH;
-canvas.height = SCREEN_HEIGHT;
 
-const renderer = new Renderer(canvas);
+const renderer = await PixiRenderer.create(canvas);
+
+// DEV 调试钩子：视觉验证/调参用，生产构建会被 tree-shake 掉
+if (import.meta.env.DEV) {
+  (window as unknown as Record<string, unknown>).__fw = {
+    state: () => gameState,
+    renderer,
+    stage: () => (renderer as unknown as { app: { stage: unknown } }).app.stage,
+  };
+}
 const input = createInputState();
 setupInputHandlers(canvas, input, () => renderer.getCameraOffset());
 

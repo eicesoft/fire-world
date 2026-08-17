@@ -73,7 +73,7 @@ Fireworld 是一款**俯视角生存游戏**：角色在一张固定大地图（
 
 ### 2.4 经验 / 宝箱 / 掉落
 
-- 敌人死亡掉落 `XPDrop`，进入 `xpAbsorptionRadius`（默认 100）后被吸向角色；拾取累加 `xp`。
+- 敌人死亡掉落 `XPDrop`（生成于怪物死亡位置，默认磁吸半径 35，玩家靠近才被吸向角色拾取）；拾取累加 `xp`。
 - 敌人死亡有 5% 概率掉落 `Chest`，分三类（`ChestType`）：`Health`（回血 30）/ `XPRange`（经验吸收半径 +20）/ `MaxHP`（最大生命 +20）。
 - Mini-boss 死亡触发 `WeaponDrop`（见 2.3）。
 

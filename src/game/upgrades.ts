@@ -69,8 +69,12 @@ function getAuxUpgradeableStats(typeId: AuxiliaryWeaponType): (keyof AuxiliaryWe
   const all = Object.keys(config.baseStats) as (keyof AuxiliaryWeaponStats)[];
   return all.filter((k) => {
     const v = config.baseStats[k];
-    return k === 'damage' || k === 'range' || k === 'cooldown' || k === 'count' || k === 'explosionRadius' ||
-           k === 'rotationSpeed' || k === 'duration' || k === 'placementCooldown' || k === 'turretFireRate' || k === 'armTime';
+    // 只保留该武器实际用到的属性（baseStats 为 0 表示该武器不消费此属性，
+    // 例如导弹的 rotationSpeed=0，不应 roll 出「旋转速度」（飞轮专属））
+    return v > 0 && (
+      k === 'damage' || k === 'range' || k === 'cooldown' || k === 'count' || k === 'explosionRadius' ||
+      k === 'rotationSpeed' || k === 'duration' || k === 'placementCooldown' || k === 'turretFireRate' || k === 'armTime'
+    );
   });
 }
 
@@ -88,7 +92,7 @@ function generateMainWeaponUpgradeOptions(typeId: WeaponTypeId): UpgradeOption[]
       weaponTypeId: typeId,
       stat,
       statDelta: delta,
-      description: `[${RARITY_NAMES[rarity]}] ${MAIN_STAT_DESCRIPTIONS[stat]?.(delta) ?? ''}`,
+      description: `[${RARITY_NAMES[rarity]}] ${WEAPON_CONFIGS[typeId].name} ${MAIN_STAT_DESCRIPTIONS[stat]?.(delta) ?? ''}`,
       rarity,
     };
   });
@@ -108,7 +112,7 @@ function generateAuxWeaponUpgradeOptions(typeId: AuxiliaryWeaponType): UpgradeOp
       auxTypeId: typeId,
       stat,
       statDelta: delta,
-      description: `[${RARITY_NAMES[rarity]}] ${AUX_STAT_DESCRIPTIONS[stat]?.(delta) ?? ''}`,
+      description: `[${RARITY_NAMES[rarity]}] ${AUXILIARY_WEAPON_CONFIGS[typeId].name} ${AUX_STAT_DESCRIPTIONS[stat]?.(delta) ?? ''}`,
       rarity,
     };
   });
@@ -159,7 +163,7 @@ export function generateUpgradeOptions(character: Character): UpgradeOption[] {
     const stat = allStats[Math.floor(Math.random() * allStats.length)];
     const rarity = Rarity.Common;
     const baseDelta = MAIN_WEAPON_DELTAS[stat] ?? 0;
-    const desc = `[普通] ${MAIN_STAT_DESCRIPTIONS[stat]?.(baseDelta) ?? ''}`;
+    const desc = `[普通] ${WEAPON_CONFIGS[character.mainWeapon.typeId].name} ${MAIN_STAT_DESCRIPTIONS[stat]?.(baseDelta) ?? ''}`;
     if (!usedDesc.has(desc)) {
       picked.push({
         target: 'main_weapon',

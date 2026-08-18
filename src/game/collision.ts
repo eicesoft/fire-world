@@ -90,6 +90,21 @@ export function findNearestEnemy(pos: Vector2, enemies: Enemy[], maxRange: numbe
   return nearest;
 }
 
+export function findAutoAimTarget(pos: Vector2, enemies: Enemy[], range: number): Enemy | null {
+  let boss: Enemy | null = null;
+  let bossDist = range;
+  for (const enemy of enemies) {
+    if (!enemy.isMiniBoss) continue;
+    const d = distance(pos, enemy.position);
+    if (d <= bossDist) {
+      bossDist = d;
+      boss = enemy;
+    }
+  }
+  if (boss) return boss;
+  return findNearestEnemy(pos, enemies, range);
+}
+
 export function findEnemiesInRange(pos: Vector2, enemies: Enemy[], range: number): Enemy[] {
   return enemies.filter((e) => distance(pos, e.position) <= range);
 }

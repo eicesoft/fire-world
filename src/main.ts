@@ -1,8 +1,7 @@
-import { GameState, GamePhase, WeaponTypeId, Vector2, SCREEN_WIDTH, SCREEN_HEIGHT, INITIAL_WEAPON_POOL } from './game/types';
-import { createInitialGameState, updateGame, selectWeapon, handleLevelUpSelect, handleWeaponDropSelect } from './game/gameLoop';
+import { GameState, GamePhase, WeaponTypeId, SCREEN_WIDTH, SCREEN_HEIGHT, INITIAL_WEAPON_POOL, PAUSE_EXIT_BTN, NEXT_STAGE_BTN } from './game/types';
+import { createInitialGameState, updateGame, selectWeapon, handleLevelUpSelect, handleWeaponDropSelect, startNextStage, updateLevelComplete, exitToMainMenu } from './game/gameLoop';
 import { PixiRenderer } from './rendering/pixiRenderer';
 import { InputState, createInputState, setupInputHandlers, getMovementDirection, updateMouseDirection, pollGamepad } from './systems/input';
-import { distance } from './game/collision';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 
@@ -87,6 +86,26 @@ canvas.addEventListener('click', (e) => {
     }
     return;
   }
+
+  if (gameState.phase === GamePhase.Paused) {
+    if (
+      mouseX >= PAUSE_EXIT_BTN.x && mouseX <= PAUSE_EXIT_BTN.x + PAUSE_EXIT_BTN.w &&
+      mouseY >= PAUSE_EXIT_BTN.y && mouseY <= PAUSE_EXIT_BTN.y + PAUSE_EXIT_BTN.h
+    ) {
+      gameState = exitToMainMenu();
+    }
+    return;
+  }
+
+  if (gameState.phase === GamePhase.LevelComplete) {
+    if (
+      mouseX >= NEXT_STAGE_BTN.x && mouseX <= NEXT_STAGE_BTN.x + NEXT_STAGE_BTN.w &&
+      mouseY >= NEXT_STAGE_BTN.y && mouseY <= NEXT_STAGE_BTN.y + NEXT_STAGE_BTN.h
+    ) {
+      startNextStage(gameState);
+    }
+    return;
+  }
 });
 
 function handleMenuNav(state: GameState, input: InputState): void {
@@ -97,7 +116,7 @@ function handleMenuNav(state: GameState, input: InputState): void {
     maxIndex = state.upgradeOptions.length - 1;
   } else if (state.phase === GamePhase.WeaponDrop) {
     maxIndex = state.weaponDropOptions.length - 1;
-  } else {
+  } else if (state.phase !== GamePhase.LevelComplete) {
     return;
   }
 
@@ -117,6 +136,8 @@ function handleMenuNav(state: GameState, input: InputState): void {
       handleLevelUpSelect(state, state.selectedIndex);
     } else if (state.phase === GamePhase.WeaponDrop) {
       handleWeaponDropSelect(state, state.selectedIndex);
+    } else if (state.phase === GamePhase.LevelComplete) {
+      startNextStage(state);
     }
     input.aConsumed = true;
   }
@@ -129,39 +150,14 @@ function gameLoop(timestamp: number): void {
   pollGamepad(input);
 
   if (gameState.phase === GamePhase.Playing) {
-    const now = performance.now() / 1000;
     const moveDir = getMovementDirection(input);
     updateMouseDirection(input, gameState.character.position);
-
-    if (now - input.lastManualAimTime > 0.3) {
-      let target: Vector2 | null = null;
-      let bossDist = Infinity;
-      for (const enemy of gameState.enemies) {
-        const d = distance(gameState.character.position, enemy.position);
-        if (enemy.isMiniBoss && d < bossDist) {
-          bossDist = d;
-          target = enemy.position;
-        }
-      }
-      if (!target) {
-        let nearestDist = Infinity;
-        for (const enemy of gameState.enemies) {
-          const d = distance(gameState.character.position, enemy.position);
-          if (d < nearestDist) { nearestDist = d; target = enemy.position; }
-        }
-      }
-      if (target) {
-        const dx = target.x - gameState.character.position.x;
-        const dy = target.y - gameState.character.position.y;
-        const len = Math.sqrt(dx * dx + dy * dy);
-        if (len > 0) input.mouseDirection = { x: dx / len, y: dy / len };
-      }
-    }
 
     gameState.mouseDirection = input.mouseDirection;
     updateGame(gameState, dt, moveDir);
   } else {
     handleMenuNav(gameState, input);
+    updateLevelComplete(gameState, dt);
   }
 
   renderer.render(gameState);

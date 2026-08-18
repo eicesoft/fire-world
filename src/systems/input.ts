@@ -14,7 +14,6 @@ export interface InputState {
   navLeftConsumed: boolean;
   navRight: boolean;
   navRightConsumed: boolean;
-  lastManualAimTime: number;
 }
 
 export function createInputState(): InputState {
@@ -32,7 +31,6 @@ export function createInputState(): InputState {
     navLeftConsumed: false,
     navRight: false,
     navRightConsumed: false,
-    lastManualAimTime: -999,
   };
 }
 
@@ -57,7 +55,6 @@ export function pollGamepad(input: InputState): void {
   if (Math.abs(ry) < DEAD_ZONE) ry = 0;
   const rLen = Math.sqrt(rx * rx + ry * ry);
   input.rightStick = rLen > 1 ? { x: rx / rLen, y: ry / rLen } : { x: rx, y: ry };
-  if (rx !== 0 || ry !== 0) input.lastManualAimTime = performance.now() / 1000;
 
   if (gp.buttons[0]?.pressed) {
     if (!input.aConsumed) input.aPressed = true;
@@ -125,7 +122,6 @@ export function setupInputHandlers(
       x: e.clientX - rect.left + offset.x,
       y: e.clientY - rect.top + offset.y,
     };
-    input.lastManualAimTime = performance.now() / 1000;
   });
 
   canvas.addEventListener('click', () => {

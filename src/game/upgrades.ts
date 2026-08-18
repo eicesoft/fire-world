@@ -3,6 +3,7 @@ import {
   UpgradeOption,
   WeaponTypeId,
   AuxiliaryWeaponType,
+  AuxiliaryWeapon,
   WeaponStats,
   AuxiliaryWeaponStats,
   Rarity,
@@ -16,11 +17,11 @@ import {
 import { createAuxiliaryWeapon } from './character';
 
 const MAIN_WEAPON_DELTAS: Partial<Record<keyof WeaponStats, number>> = {
-  damage: 5, fireRate: 1, magazineCapacity: 5, reloadSpeed: -0.2, penetration: 1, bulletCount: 1, range: 20,
+  damage: 5, fireRate: 1, magazineCapacity: 5, reloadSpeed: -0.2, penetration: 1, bulletCount: 1, range: 10,
 };
 
 const AUX_WEAPON_DELTAS: Partial<Record<keyof AuxiliaryWeaponStats, number>> = {
-  damage: 5, range: 20, cooldown: -0.3, count: 1, explosionRadius: 10, rotationSpeed: 0.3, duration: 2, placementCooldown: -0.5, turretFireRate: 0.3, armTime: -0.2,
+  damage: 5, range: 10, cooldown: -0.3, count: 1, explosionRadius: 10, rotationSpeed: 0.3, duration: 2, placementCooldown: -0.5, turretFireRate: 0.3, armTime: -0.2,
 };
 
 const MAIN_STAT_DESCRIPTIONS: Record<string, (delta: number) => string> = {
@@ -41,7 +42,7 @@ const AUX_STAT_DESCRIPTIONS: Record<string, (delta: number) => string> = {
   explosionRadius: (d) => `${d > 0 ? '+' : ''}${d} 爆炸范围`,
   rotationSpeed: (d) => `${d > 0 ? '+' : ''}${d} 旋转速度`,
   duration: (d) => `${d > 0 ? '+' : ''}${d} 持续时间`,
-  placementCooldown: (d) => `${d > 0 ? '+' : ''}${d} 放置间隔`,
+  placementCooldown: (d) => `${d > 0 ? '+' : ''}${d} 放置时间`,
   turretFireRate: (d) => `${d > 0 ? '+' : ''}${d} 炮台攻速`,
   armTime: (d) => `${d > 0 ? '+' : ''}${d} 部署时间`,
 };
@@ -64,18 +65,34 @@ function getMainUpgradeableStats(typeId: WeaponTypeId): (keyof WeaponStats)[] {
   return stats;
 }
 
-function getAuxUpgradeableStats(typeId: AuxiliaryWeaponType): (keyof AuxiliaryWeaponStats)[] {
-  const config = AUXILIARY_WEAPON_CONFIGS[typeId];
-  const all = Object.keys(config.baseStats) as (keyof AuxiliaryWeaponStats)[];
-  return all.filter((k) => {
-    const v = config.baseStats[k];
-    // 只保留该武器实际用到的属性（baseStats 为 0 表示该武器不消费此属性，
-    // 例如导弹的 rotationSpeed=0，不应 roll 出「旋转速度」（飞轮专属））
-    return v > 0 && (
-      k === 'damage' || k === 'range' || k === 'cooldown' || k === 'count' || k === 'explosionRadius' ||
-      k === 'rotationSpeed' || k === 'duration' || k === 'placementCooldown' || k === 'turretFireRate' || k === 'armTime'
-    );
-  });
+const AUX_UPGRADEABLE_OVERRIDES: Partial<Record<AuxiliaryWeaponType, (keyof AuxiliaryWeaponStats)[]>> = {
+  [AuxiliaryWeaponType.Missile]: ['damage', 'explosionRadius', 'placementCooldown'],
+  [AuxiliaryWeaponType.SwordEnergy]: ['count', 'duration', 'placementCooldown'],
+};
+
+function getAuxUpgradeableStats(aux: AuxiliaryWeapon): (keyof AuxiliaryWeaponStats)[] {
+  const config = AUXILIARY_WEAPON_CONFIGS[aux.typeId];
+  const override = AUX_UPGRADEABLE_OVERRIDES[aux.typeId];
+  const stats = override ?? (() => {
+    const all = Object.keys(config.baseStats) as (keyof AuxiliaryWeaponStats)[];
+    return all.filter((k) => {
+      const v = config.baseStats[k];
+      // 只保留该武器实际用到的属性（baseStats 为 0 表示该武器不消费此属性，
+      // 例如导弹的 rotationSpeed=0，不应 roll 出「旋转速度」（飞轮专属））
+      return v > 0 && (
+        k === 'damage' || k === 'range' || k === 'cooldown' || k === 'count' || k === 'explosionRadius' ||
+        k === 'rotationSpeed' || k === 'duration' || k === 'placementCooldown' || k === 'turretFireRate' || k === 'armTime'
+      );
+    });
+  })();
+  // 旋转飞轮 / 剑气数量满后不再出「数量」升级，改为其余属性
+  if (
+    (aux.typeId === AuxiliaryWeaponType.WindWheel || aux.typeId === AuxiliaryWeaponType.SwordEnergy) &&
+    Math.floor(aux.stats.count) >= config.maxCount
+  ) {
+    return stats.filter((k) => k !== 'count');
+  }
+  return stats;
 }
 
 function generateMainWeaponUpgradeOptions(typeId: WeaponTypeId): UpgradeOption[] {
@@ -98,8 +115,9 @@ function generateMainWeaponUpgradeOptions(typeId: WeaponTypeId): UpgradeOption[]
   });
 }
 
-function generateAuxWeaponUpgradeOptions(typeId: AuxiliaryWeaponType): UpgradeOption[] {
-  const stats = getAuxUpgradeableStats(typeId);
+function generateAuxWeaponUpgradeOptions(aux: AuxiliaryWeapon): UpgradeOption[] {
+  const stats = getAuxUpgradeableStats(aux);
+  const typeId = aux.typeId;
   const shuffled = stats.sort(() => Math.random() - 0.5);
   const count = Math.min(1, shuffled.length);
   return shuffled.slice(0, count).map((stat) => {
@@ -139,7 +157,7 @@ export function generateUpgradeOptions(character: Character): UpgradeOption[] {
   generateMainWeaponUpgradeOptions(character.mainWeapon.typeId).forEach((o) => options.push(o));
 
   for (const aux of character.auxWeapons) {
-    generateAuxWeaponUpgradeOptions(aux.typeId).forEach((o) => options.push(o));
+    generateAuxWeaponUpgradeOptions(aux).forEach((o) => options.push(o));
   }
 
   if (character.auxWeapons.length < character.maxAuxSlots) {

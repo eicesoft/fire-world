@@ -6,6 +6,7 @@ import {
   Projectile,
   ChestType,
   Vector2,
+  Enemy,
   SlashEffect,
   BeamEffect,
   DamageNumber,
@@ -15,22 +16,42 @@ import {
   INITIAL_WEAPON_POOL,
   WEAPON_CONFIGS,
   AUXILIARY_WEAPON_CONFIGS,
+  STAGE_DURATION,
+  COINS_PER_KILL,
+  STAGE_NEXT_COUNTDOWN,
 } from './types';
-import { createCharacter, getXpThreshold, getMiniBossKillThreshold, healCharacter, increaseMaxHealth, addXpAbsorptionRadius } from './character';
+import { createCharacter, getXpThreshold, getMiniBossKillThreshold, healCharacter, increaseMaxHealth, addXpAbsorptionRadius, increaseSpeed } from './character';
 import { applyDamage, respawnCharacter } from './combat';
 import { generateUpgradeOptions, applyUpgrade, generateWeaponDropOptions } from './upgrades';
-import { spawnEnemyWave, spawnMiniBoss, createXpDrop, createChest, generateObstacles, resetIds } from './spawner';
+import { spawnEnemyWave, createXpDrop, createChest, generateObstacles, resetIds } from './spawner';
+import { loadCoins, addCoins } from './coins';
 import { updateAuxWeapons, resetAuxIds } from '../systems/auxWeapons';
-import { distance, angleBetween, findEnemiesInRange, enemiesInArc, clampToMap, resolveObstacleCollision } from './collision';
+import { distance, angleBetween, findAutoAimTarget, findNearestEnemy, enemiesInArc, clampToMap, resolveObstacleCollision } from './collision';
 
 let nextProjectileId = 0;
+
+function projectileSpeed(weaponType: WeaponTypeId): number {
+  return weaponType === WeaponTypeId.Flamethrower ? 350 : 500;
+}
+
+function predictAimPoint(origin: Vector2, target: Enemy, projectileSpeed: number): Vector2 {
+  const dist = distance(origin, target.position);
+  if (dist <= 0) return { x: target.position.x, y: target.position.y };
+  const toOrigin = { x: origin.x - target.position.x, y: origin.y - target.position.y };
+  const len = Math.sqrt(toOrigin.x * toOrigin.x + toOrigin.y * toOrigin.y) || 1;
+  const timeToImpact = dist / projectileSpeed;
+  return {
+    x: target.position.x + (toOrigin.x / len) * target.speed * timeToImpact,
+    y: target.position.y + (toOrigin.y / len) * target.speed * timeToImpact,
+  };
+}
 
 function createProjectile(
   origin: Vector2, target: Vector2, damage: number, penetration: number,
   weaponType: WeaponTypeId, explosionRadius: number = 0, projectileSize: number = 3,
 ): Projectile {
   const angle = angleBetween(origin, target);
-  const speed = weaponType === WeaponTypeId.Flamethrower ? 350 : 500;
+  const speed = projectileSpeed(weaponType);
   const lifetime = weaponType === WeaponTypeId.Flamethrower
     ? Math.max(0.2, (projectileSize * 2.13) / speed)
     : 2;
@@ -55,6 +76,9 @@ export function createInitialGameState(): GameState {
     turrets: [], landMines: [],
     mapWidth: MAP_WIDTH, mapHeight: MAP_HEIGHT,
     mouseDirection: { x: 1, y: 0 }, elapsedTime: 0,
+    stageLevel: 1, stageElapsedTime: 0, stageKillCount: 0,
+    nextStageCountdown: STAGE_NEXT_COUNTDOWN, lastStageResult: null,
+    coins: loadCoins(),
     miniBossKillThreshold: getMiniBossKillThreshold(1), currentMiniBossKills: 0,
     upgradeOptions: [], weaponDropOptions: [],
     availableWeaponTypes: [...INITIAL_WEAPON_POOL],
@@ -66,12 +90,66 @@ export function selectWeapon(state: GameState, weaponType: WeaponTypeId): void {
   state.character = createCharacter(weaponType);
   state.selectedWeaponType = weaponType;
   state.selectedIndex = 0;
+  state.stageLevel = 1;
+  state.stageElapsedTime = 0;
+  state.stageKillCount = 0;
+  state.lastStageResult = null;
+  state.nextStageCountdown = STAGE_NEXT_COUNTDOWN;
   state.phase = GamePhase.Playing;
+}
+
+/** 退出到主菜单（重置整局，金币保留在 localStorage） */
+export function exitToMainMenu(): GameState {
+  return createInitialGameState();
+}
+
+/** 结算本关：金币 = 本关击杀数 × 关卡等级 × 100 */
+function completeStage(state: GameState): void {
+  const coinsEarned = Math.floor(state.stageKillCount * state.stageLevel * COINS_PER_KILL);
+  state.lastStageResult = { stage: state.stageLevel, kills: state.stageKillCount, coinsEarned };
+  state.coins = addCoins(coinsEarned);
+  state.stageElapsedTime = STAGE_DURATION;
+  state.nextStageCountdown = STAGE_NEXT_COUNTDOWN;
+  state.phase = GamePhase.LevelComplete;
+}
+
+/** 开启下一关：自动重置计时与计数、清场，怪物血量随关卡等级上涨 */
+export function startNextStage(state: GameState): void {
+  state.stageLevel++;
+  state.stageElapsedTime = 0;
+  state.stageKillCount = 0;
+  state.nextStageCountdown = STAGE_NEXT_COUNTDOWN;
+  state.enemies = [];
+  state.projectiles = [];
+  state.xpDrops = [];
+  state.chests = [];
+  state.turrets = [];
+  state.landMines = [];
+  state.slashEffects = [];
+  state.beamEffects = [];
+  state.damageNumbers = [];
+  state.character.invincibleTimer = 0;
+  state.miniBossKillThreshold = getMiniBossKillThreshold(state.stageLevel);
+  state.currentMiniBossKills = 0;
+  state.phase = GamePhase.Playing;
+}
+
+/** 关卡完成界面的自动倒计时，结束后自动进入下一关 */
+export function updateLevelComplete(state: GameState, dt: number): void {
+  if (state.phase !== GamePhase.LevelComplete) return;
+  state.nextStageCountdown = Math.max(0, state.nextStageCountdown - dt);
+  if (state.nextStageCountdown <= 0) startNextStage(state);
 }
 
 export function updateGame(state: GameState, dt: number, moveDir: Vector2): void {
   if (state.phase !== GamePhase.Playing) return;
   state.elapsedTime += dt;
+  state.stageElapsedTime += dt;
+
+  if (state.stageElapsedTime >= STAGE_DURATION) {
+    completeStage(state);
+    return;
+  }
 
   updateCharacterMovement(state, dt, moveDir);
   updateMainWeapon(state, dt);
@@ -103,7 +181,16 @@ function updateCharacterMovement(state: GameState, dt: number, moveDir: Vector2)
 function updateMainWeapon(state: GameState, dt: number): void {
   const char = state.character;
   const weapon = char.mainWeapon;
-  const mouseDir = state.mouseDirection;
+  const config = WEAPON_CONFIGS[weapon.typeId];
+
+  const target = findAutoAimTarget(char.position, state.enemies, weapon.stats.range);
+  // 人物朝向始终对准当前攻击目标（含冷却/换弹期间），无目标时保留鼠标朝向
+  if (target) {
+    const dirAngle = config.isMelee
+      ? angleBetween(char.position, target.position)
+      : angleBetween(char.position, predictAimPoint(char.position, target, projectileSpeed(weapon.typeId)));
+    state.mouseDirection = { x: Math.cos(dirAngle), y: Math.sin(dirAngle) };
+  }
 
   weapon.fireCooldown = Math.max(0, weapon.fireCooldown - dt);
   weapon.reloadTimer = Math.max(0, weapon.reloadTimer - dt);
@@ -116,37 +203,56 @@ function updateMainWeapon(state: GameState, dt: number): void {
   }
   if (weapon.fireCooldown > 0) return;
 
-  const config = WEAPON_CONFIGS[weapon.typeId];
   if (config.isMelee) {
-    const dirAngle = Math.atan2(mouseDir.y, mouseDir.x);
+    if (!target) return;
+    const dirAngle = angleBetween(char.position, target.position);
     const targets = enemiesInArc(char.position, dirAngle, state.enemies, weapon.stats.range, config.attackArc ?? Math.PI / 2);
     if (targets.length > 0) {
-      for (const target of targets) {
-        target.health -= weapon.stats.damage;
-        state.damageNumbers.push({ position: { x: target.position.x, y: target.position.y - target.size }, value: weapon.stats.damage, timer: 0.8, maxTimer: 0.8 });
-        const dx = target.position.x - char.position.x;
-        const dy = target.position.y - char.position.y;
+      for (const hit of targets) {
+        hit.health -= weapon.stats.damage;
+        state.damageNumbers.push({ position: { x: hit.position.x, y: hit.position.y - hit.size }, value: weapon.stats.damage, timer: 0.8, maxTimer: 0.8 });
+        const dx = hit.position.x - char.position.x;
+        const dy = hit.position.y - char.position.y;
         const len = Math.sqrt(dx * dx + dy * dy);
-        if (len > 0) { target.position.x += (dx / len) * 200; target.position.y += (dy / len) * 200; }
+        if (len > 0) { hit.position.x += (dx / len) * 200; hit.position.y += (dy / len) * 200; }
       }
       state.slashEffects.push({ position: { x: char.position.x, y: char.position.y }, direction: dirAngle, arc: config.attackArc ?? Math.PI / 2, range: weapon.stats.range, timer: 0.15 });
       weapon.fireCooldown = 1 / weapon.stats.fireRate;
     }
   } else {
-    const nearest = findEnemiesInRange(char.position, state.enemies, weapon.stats.range);
-    if (nearest.length > 0) {
-      for (let i = 0; i < weapon.stats.bulletCount; i++) {
-        const spread = (Math.random() - 0.5) * 0.2;
-        const aimAngle = Math.atan2(mouseDir.y, mouseDir.x);
-        const finalAngle = aimAngle + spread;
-        const aimPos: Vector2 = { x: char.position.x + Math.cos(finalAngle) * 100, y: char.position.y + Math.sin(finalAngle) * 100 };
-        const projSize = weapon.typeId === WeaponTypeId.Flamethrower ? weapon.stats.range : 3;
-state.projectiles.push(createProjectile(char.position, aimPos, weapon.stats.damage, weapon.stats.penetration, weapon.typeId, 0, projSize));
-      }
-      weapon.currentAmmo--;
-      weapon.fireCooldown = 1 / weapon.stats.fireRate;
+    if (!target) return;
+    const aimPoint = predictAimPoint(char.position, target, projectileSpeed(weapon.typeId));
+    const aimAngle = angleBetween(char.position, aimPoint);
+    for (let i = 0; i < weapon.stats.bulletCount; i++) {
+      const spread = (Math.random() - 0.5) * 0.2;
+      const finalAngle = aimAngle + spread;
+      const aimPos: Vector2 = { x: char.position.x + Math.cos(finalAngle) * 100, y: char.position.y + Math.sin(finalAngle) * 100 };
+      const projSize = weapon.typeId === WeaponTypeId.Flamethrower ? weapon.stats.range : 3;
+      state.projectiles.push(createProjectile(char.position, aimPos, weapon.stats.damage, weapon.stats.penetration, weapon.typeId, 0, projSize));
     }
+    weapon.currentAmmo--;
+    weapon.fireCooldown = 1 / weapon.stats.fireRate;
   }
+}
+
+const SWORD_HOMING_RANGE = 300;
+const SWORD_HOMING_TURN = 10;
+
+function homeProjectile(proj: Projectile, enemies: Enemy[], dt: number): void {
+  const seek = findNearestEnemy(proj.position, enemies, SWORD_HOMING_RANGE);
+  if (!seek) return;
+  const speed = Math.hypot(proj.velocity.x, proj.velocity.y) || 420;
+  const curDir = speed > 0 ? { x: proj.velocity.x / speed, y: proj.velocity.y / speed } : { x: 1, y: 0 };
+  const dx = seek.position.x - proj.position.x;
+  const dy = seek.position.y - proj.position.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const desired = { x: dx / len, y: dy / len };
+  const turn = Math.min(1, SWORD_HOMING_TURN * dt);
+  const nx = curDir.x + (desired.x - curDir.x) * turn;
+  const ny = curDir.y + (desired.y - curDir.y) * turn;
+  const nlen = Math.hypot(nx, ny) || 1;
+  proj.velocity.x = (nx / nlen) * speed;
+  proj.velocity.y = (ny / nlen) * speed;
 }
 
 function updateProjectiles(state: GameState, dt: number): void {
@@ -154,6 +260,9 @@ function updateProjectiles(state: GameState, dt: number): void {
   const enemies = state.enemies;
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const proj = projectiles[i];
+    if (proj.weaponType === ('sword_energy' as any)) {
+      homeProjectile(proj, enemies, dt);
+    }
     proj.position.x += proj.velocity.x * dt;
     proj.position.y += proj.velocity.y * dt;
     proj.lifetime -= dt;
@@ -165,7 +274,10 @@ function updateProjectiles(state: GameState, dt: number): void {
 
     for (const enemy of enemies) {
       if (proj.hitEnemies.has(enemy.id)) continue;
-      if (distance(proj.position, enemy.position) < enemy.size) {
+      const hitRadius = proj.weaponType === ('sword_energy' as any)
+        ? enemy.size + proj.projectileSize * 0.6
+        : enemy.size;
+      if (distance(proj.position, enemy.position) < hitRadius) {
         enemy.health -= proj.damage;
         state.damageNumbers.push({ position: { x: enemy.position.x, y: enemy.position.y - enemy.size }, value: proj.damage, timer: 0.8, maxTimer: 0.8 });
         proj.hitEnemies.add(enemy.id);
@@ -238,11 +350,13 @@ function updateChests(state: GameState): void {
   const char = state.character;
   for (let i = state.chests.length - 1; i >= 0; i--) {
     const chest = state.chests[i];
-    if (distance(char.position, chest.position) < 20) {
+    if (distance(char.position, chest.position) < char.xpAbsorptionRadius) {
       switch (chest.type) {
         case ChestType.Health: healCharacter(char, 30); break;
-        case ChestType.XPRange: addXpAbsorptionRadius(char, 20); break;
         case ChestType.MaxHP: increaseMaxHealth(char, 20); break;
+        case ChestType.MoveSpeed: increaseSpeed(char, 20); break;
+        case ChestType.XPRange: addXpAbsorptionRadius(char, 20); break;
+        case ChestType.XP: char.xp += 30; break;
       }
       state.chests.splice(i, 1);
     }
@@ -280,7 +394,7 @@ function spawnEnemies(state: GameState): void {
   const expectedEnemies = Math.min(50, 5 + state.elapsedTime * 0.5);
   if (state.enemies.length < expectedEnemies) {
     const toSpawn = Math.min(5, Math.ceil(expectedEnemies - state.enemies.length));
-    const newEnemies = spawnEnemyWave(state.character.position, state.character.level, toSpawn);
+    const newEnemies = spawnEnemyWave(state.character.position, state.character.level, toSpawn, state.stageLevel);
     state.enemies.push(...newEnemies);
   }
 }
@@ -302,9 +416,10 @@ function cleanupDead(state: GameState): void {
     const enemy = state.enemies[i];
     if (enemy.health <= 0) {
       state.character.killCount++;
+      state.stageKillCount++;
       const xpDrop = createXpDrop(enemy.position, Math.floor(enemy.xpValue));
       state.xpDrops.push(xpDrop);
-      if (Math.random() < 0.05) state.chests.push(createChest(enemy.position));
+      if (Math.random() < 0.025) state.chests.push(createChest(enemy.position));
 
       if (enemy.isMiniBoss) {
         const ownedTypes = state.character.auxWeapons.map((a) => a.typeId);

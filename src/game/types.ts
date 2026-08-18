@@ -155,8 +155,10 @@ export interface Chest {
 
 export enum ChestType {
   Health = 'health',
-  XPRange = 'xp_range',
   MaxHP = 'max_hp',
+  MoveSpeed = 'move_speed',
+  XPRange = 'xp_range',
+  XP = 'xp',
 }
 
 export enum Rarity {
@@ -215,6 +217,7 @@ export enum GamePhase {
   Paused = 'paused',
   LevelUp = 'level_up',
   WeaponDrop = 'weapon_drop',
+  LevelComplete = 'level_complete',
   GameOver = 'game_over',
 }
 
@@ -248,6 +251,7 @@ export interface TurretEntity {
   damage: number;
   fireRate: number;
   range: number;
+  explosionRadius: number;
   fireCooldown: number;
   lifetime: number;
 }
@@ -264,6 +268,12 @@ export interface LandMineEntity {
 export interface WindWheelBlade {
   angle: number;
   active: boolean;
+}
+
+export interface StageResult {
+  stage: number;
+  kills: number;
+  coinsEarned: number;
 }
 
 export interface GameState {
@@ -283,6 +293,12 @@ export interface GameState {
   mapHeight: number;
   mouseDirection: Vector2;
   elapsedTime: number;
+  stageLevel: number;
+  stageElapsedTime: number;
+  stageKillCount: number;
+  nextStageCountdown: number;
+  lastStageResult: StageResult | null;
+  coins: number;
   miniBossKillThreshold: number;
   currentMiniBossKills: number;
   upgradeOptions: UpgradeOption[];
@@ -303,35 +319,61 @@ export const RESPAWN_INVINCIBLE_TIME = 2;
 export const INITIAL_WEAPON_CHOICES = 5;
 export const MAX_AUX_SLOTS = 2;
 
+/** 每关时长（秒） */
+export const STAGE_DURATION = 600;
+/** 结算公式：击杀数 × 关卡等级 × 该系数 */
+export const COINS_PER_KILL = 100;
+/** 关卡结算后自动进入下一关的倒计时（秒） */
+export const STAGE_NEXT_COUNTDOWN = 5;
+
+/** 暂停面板「退出游戏」按钮（面板为左侧 300px 栏） */
+export const PAUSE_EXIT_BTN = { x: 10, y: 552, w: 280, h: 34 };
+/** 关卡完成界面「下一关」按钮 */
+export const NEXT_STAGE_BTN = { x: (SCREEN_WIDTH - 220) / 2, y: 380, w: 220, h: 50 };
+
+export interface WeaponCharacterPreset {
+  speedMultiplier: number;
+  health: number;
+}
+
+export const WEAPON_CHARACTER_PRESETS: Record<WeaponTypeId, WeaponCharacterPreset> = {
+  [WeaponTypeId.MachineGun]: { speedMultiplier: 1, health: 100 },
+  [WeaponTypeId.Shotgun]: { speedMultiplier: 0.8, health: 130 },
+  [WeaponTypeId.MeleeBlade]: { speedMultiplier: 1.4, health: 90 },
+  [WeaponTypeId.Flamethrower]: { speedMultiplier: 0.75, health: 120 },
+  [WeaponTypeId.LaserGun]: { speedMultiplier: 1, health: 100 },
+  [WeaponTypeId.Bow]: { speedMultiplier: 1.25, health: 80 },
+};
+
 export const WEAPON_CONFIGS: Record<WeaponTypeId, WeaponConfig> = {
   [WeaponTypeId.MachineGun]: {
     id: WeaponTypeId.MachineGun, name: '机关枪',
-    baseStats: { damage: 10, fireRate: 8, magazineCapacity: 30, reloadSpeed: 2.5, penetration: 1, bulletCount: 1, range: 300 },
+    baseStats: { damage: 10, fireRate: 8, magazineCapacity: 30, reloadSpeed: 2.5, penetration: 1, bulletCount: 1, range: 150 },
     isMelee: false,
   },
   [WeaponTypeId.Shotgun]: {
     id: WeaponTypeId.Shotgun, name: '散弹枪',
-    baseStats: { damage: 7, fireRate: 1.2, magazineCapacity: 6, reloadSpeed: 1.5, penetration: 1, bulletCount: 5, range: 200 },
+    baseStats: { damage: 7, fireRate: 1.2, magazineCapacity: 6, reloadSpeed: 1.5, penetration: 1, bulletCount: 5, range: 100 },
     isMelee: false,
   },
   [WeaponTypeId.MeleeBlade]: {
     id: WeaponTypeId.MeleeBlade, name: '近战刀',
-    baseStats: { damage: 25, fireRate: 5, magazineCapacity: Infinity, reloadSpeed: 0, penetration: Infinity, bulletCount: 1, range: 60 },
-    isMelee: true, attackArc: Math.PI / 2,
+    baseStats: { damage: 25, fireRate: 5, magazineCapacity: Infinity, reloadSpeed: 0, penetration: Infinity, bulletCount: 1, range: 45 },
+    isMelee: true, attackArc: Math.PI * 0.75,
   },
   [WeaponTypeId.Flamethrower]: {
     id: WeaponTypeId.Flamethrower, name: '火焰喷射器',
-    baseStats: { damage: 3, fireRate: 12, magazineCapacity: 200, reloadSpeed: 3.9, penetration: 1, bulletCount: 1, range: 150 },
+    baseStats: { damage: 3, fireRate: 12, magazineCapacity: 200, reloadSpeed: 3.9, penetration: 1, bulletCount: 1, range: 75 },
     isMelee: false,
   },
   [WeaponTypeId.LaserGun]: {
     id: WeaponTypeId.LaserGun, name: '激光枪',
-    baseStats: { damage: 15, fireRate: 3, magazineCapacity: 20, reloadSpeed: 1.8, penetration: 5, bulletCount: 1, range: 400 },
+    baseStats: { damage: 15, fireRate: 3, magazineCapacity: 20, reloadSpeed: 1.8, penetration: 5, bulletCount: 1, range: 200 },
     isMelee: false,
   },
   [WeaponTypeId.Bow]: {
     id: WeaponTypeId.Bow, name: '弓箭',
-    baseStats: { damage: 20, fireRate: 1.5, magazineCapacity: 1, reloadSpeed: 0.4, penetration: 3, bulletCount: 3, range: 350 },
+    baseStats: { damage: 20, fireRate: 1.5, magazineCapacity: 1, reloadSpeed: 0.4, penetration: 3, bulletCount: 3, range: 175 },
     isMelee: false,
   },
 };
@@ -339,27 +381,27 @@ export const WEAPON_CONFIGS: Record<WeaponTypeId, WeaponConfig> = {
 export const AUXILIARY_WEAPON_CONFIGS: Record<AuxiliaryWeaponType, AuxiliaryWeaponConfig> = {
   [AuxiliaryWeaponType.Missile]: {
     id: AuxiliaryWeaponType.Missile, name: '导弹',
-    baseStats: { damage: 30, range: 300, cooldown: 3, count: 1, explosionRadius: 40, rotationSpeed: 0, duration: 0, placementCooldown: 0, turretFireRate: 0, armTime: 0 },
+    baseStats: { damage: 30, range: 150, cooldown: 0, count: 1, explosionRadius: 40, rotationSpeed: 0, duration: 0, placementCooldown: 3, turretFireRate: 0, armTime: 0 },
     maxCount: 1,
   },
   [AuxiliaryWeaponType.WindWheel]: {
     id: AuxiliaryWeaponType.WindWheel, name: '旋转风轮',
-    baseStats: { damage: 10, range: 80, cooldown: 0, count: 3, explosionRadius: 0, rotationSpeed: 2, duration: 0, placementCooldown: 0, turretFireRate: 0, armTime: 0 },
+    baseStats: { damage: 25, range: 40, cooldown: 0, count: 3, explosionRadius: 0, rotationSpeed: 4.4, duration: 0, placementCooldown: 0, turretFireRate: 0, armTime: 0 },
     maxCount: 6,
   },
   [AuxiliaryWeaponType.LaserGun]: {
     id: AuxiliaryWeaponType.LaserGun, name: '激光枪',
-    baseStats: { damage: 12, range: 250, cooldown: 0.5, count: 1, explosionRadius: 0, rotationSpeed: 0, duration: 0, placementCooldown: 0, turretFireRate: 0, armTime: 0 },
+    baseStats: { damage: 21.6, range: 125, cooldown: 0.5, count: 1, explosionRadius: 0, rotationSpeed: 0, duration: 0, placementCooldown: 0, turretFireRate: 0, armTime: 0 },
     maxCount: 1,
   },
   [AuxiliaryWeaponType.SwordEnergy]: {
     id: AuxiliaryWeaponType.SwordEnergy, name: '剑气',
-    baseStats: { damage: 20, range: 200, cooldown: 1.5, count: 1, explosionRadius: 0, rotationSpeed: 0, duration: 0, placementCooldown: 0, turretFireRate: 0, armTime: 0 },
-    maxCount: 1,
+    baseStats: { damage: 20, range: 100, cooldown: 0, count: 1, explosionRadius: 0, rotationSpeed: 0, duration: 2.5, placementCooldown: 1.5, turretFireRate: 0, armTime: 0 },
+    maxCount: 6,
   },
   [AuxiliaryWeaponType.Turret]: {
     id: AuxiliaryWeaponType.Turret, name: '炮台',
-    baseStats: { damage: 8, range: 200, cooldown: 0, count: 1, explosionRadius: 0, rotationSpeed: 0, duration: 10, placementCooldown: 5, turretFireRate: 1, armTime: 0 },
+    baseStats: { damage: 16, range: 100, cooldown: 0, count: 1, explosionRadius: 30, rotationSpeed: 0, duration: 10, placementCooldown: 0, turretFireRate: 2, armTime: 0 },
     maxCount: 3,
   },
   [AuxiliaryWeaponType.LandMine]: {

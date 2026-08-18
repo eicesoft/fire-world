@@ -12,6 +12,8 @@ import {
 } from '../game/types';
 import { distance, angleBetween, findNearestEnemy } from '../game/collision';
 
+const MAX_AUX_LASER_WIDTH = 16;
+
 let nextEntityId = 0;
 
 export function resetAuxIds(): void {
@@ -75,7 +77,7 @@ function updateMissile(state: GameState, aux: AuxiliaryWeapon, dt: number): void
     };
     state.projectiles.push(proj);
   }
-  aux.cooldownTimer = aux.stats.cooldown;
+  aux.cooldownTimer = Math.max(0.15, aux.stats.placementCooldown);
 }
 
 function updateWindWheel(state: GameState, aux: AuxiliaryWeapon, dt: number): void {
@@ -106,7 +108,7 @@ function updateAuxLaserGun(state: GameState, aux: AuxiliaryWeapon, dt: number): 
   const nearest = findNearestEnemy(state.character.position, state.enemies, aux.stats.range);
   if (!nearest) return;
 
-  const beamWidth = Math.max(4, 4 + Math.floor(aux.stats.count) * 3);
+  const beamWidth = Math.min(MAX_AUX_LASER_WIDTH, Math.max(4, 4 + Math.floor(aux.stats.count) * 3));
   const damageMult = Math.max(1, Math.floor(aux.stats.count));
   const angle = angleBetween(state.character.position, nearest.position);
   const endX = state.character.position.x + Math.cos(angle) * aux.stats.range;
@@ -138,27 +140,28 @@ function updateSwordEnergy(state: GameState, aux: AuxiliaryWeapon, dt: number): 
   const nearest = findNearestEnemy(state.character.position, state.enemies, aux.stats.range);
   if (!nearest) return;
 
-  const count = Math.max(1, Math.floor(aux.stats.count));
+  const count = Math.max(1, Math.min(Math.floor(aux.stats.count), AUXILIARY_WEAPON_CONFIGS[AuxiliaryWeaponType.SwordEnergy].maxCount));
+  const duration = Math.max(0.5, aux.stats.duration);
   for (let i = 0; i < count; i++) {
-    const spread = (i - (count - 1) / 2) * 0.1;
+    const spread = (i - (count - 1) / 2) * 0.25;
     const angle = angleBetween(state.character.position, nearest.position) + spread;
     const proj: Projectile = {
       id: `aux_sword_${nextEntityId++}`,
       position: { x: state.character.position.x, y: state.character.position.y },
-      velocity: { x: Math.cos(angle) * 500, y: Math.sin(angle) * 500 },
+      velocity: { x: Math.cos(angle) * 420, y: Math.sin(angle) * 420 },
       damage: aux.stats.damage,
-      penetration: 999,
+      penetration: Infinity,
       hitEnemies: new Set<string>(),
       ownerId: 'character',
-      lifetime: 0.8,
-      maxLifetime: 0.8,
+      lifetime: duration,
+      maxLifetime: duration,
       weaponType: 'sword_energy' as any,
       explosionRadius: 0,
-      projectileSize: 6,
+      projectileSize: 8,
     };
     state.projectiles.push(proj);
   }
-  aux.cooldownTimer = aux.stats.cooldown;
+  aux.cooldownTimer = Math.max(0.15, aux.stats.placementCooldown);
 }
 
 function distanceToSegment(p: Vector2, a: Vector2, b: Vector2): number {
@@ -194,12 +197,13 @@ function updateTurret(state: GameState, aux: AuxiliaryWeapon, dt: number): void 
     damage: aux.stats.damage,
     fireRate: aux.stats.turretFireRate,
     range: aux.stats.range,
+    explosionRadius: aux.stats.explosionRadius,
     fireCooldown: 0,
     lifetime: aux.stats.duration,
   };
   state.turrets.push(turret);
   aux.placedCount++;
-  aux.cooldownTimer = aux.stats.placementCooldown > 0 ? aux.stats.placementCooldown : 999;
+  aux.cooldownTimer = Math.max(0, aux.stats.placementCooldown);
 }
 
 function updateLandMine(state: GameState, aux: AuxiliaryWeapon, dt: number): void {
@@ -248,7 +252,7 @@ function updateTurrets(state: GameState, dt: number): void {
       lifetime: 1,
       maxLifetime: 1,
       weaponType: 'turret' as any,
-      explosionRadius: 0,
+      explosionRadius: turret.explosionRadius,
       projectileSize: 3,
     };
     state.projectiles.push(proj);

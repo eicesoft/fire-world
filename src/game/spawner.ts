@@ -65,6 +65,7 @@ export function spawnEnemyWave(
   characterPos: Vector2,
   level: number,
   count: number,
+  stageLevel: number = 1,
 ): Enemy[] {
   const types = getAvailableEnemyTypes(level);
   const enemies: Enemy[] = [];
@@ -73,12 +74,14 @@ export function spawnEnemyWave(
     const pos = randomSpawnPosition(characterPos, 400, 600);
     const xpMult = getXpFromEnemy(level);
     const timeMult = 1 + (level - 1) * 0.1;
+    // 关卡等级每提升 1 级，怪物起始血量 +100%（关卡 1 为 1 倍，关卡 2 为 2 倍…）
+    const stageHpMult = stageLevel;
     enemies.push({
       id: `enemy_${nextEnemyId++}`,
       configId: config.id,
       position: pos,
-      health: config.health * timeMult,
-      maxHealth: config.health * timeMult,
+      health: config.health * timeMult * stageHpMult,
+      maxHealth: config.health * timeMult * stageHpMult,
       speed: config.speed,
       damage: config.damage,
       xpValue: config.xpValue * xpMult,
@@ -92,15 +95,16 @@ export function spawnEnemyWave(
   return enemies;
 }
 
-export function spawnMiniBoss(characterPos: Vector2, level: number): Enemy {
+export function spawnMiniBoss(characterPos: Vector2, level: number, stageLevel: number = 1): Enemy {
   const pos = randomSpawnPosition(characterPos, 400, 500);
   const xpMult = getXpFromEnemy(level);
+  const hp = MINI_BOSS_CONFIG.health * (1 + (level - 1) * 0.15) * stageLevel;
   return {
     id: `mini_boss_${nextEnemyId++}`,
     configId: 'mini_boss',
     position: pos,
-    health: MINI_BOSS_CONFIG.health * (1 + (level - 1) * 0.15),
-    maxHealth: MINI_BOSS_CONFIG.health * (1 + (level - 1) * 0.15),
+    health: hp,
+    maxHealth: hp,
     speed: MINI_BOSS_CONFIG.speed,
     damage: MINI_BOSS_CONFIG.damage,
     xpValue: MINI_BOSS_CONFIG.xpValue * xpMult * MINI_BOSS_XP_MULTIPLIER,
@@ -121,7 +125,7 @@ export function createXpDrop(position: Vector2, value: number): XPDrop {
 }
 
 export function createChest(position: Vector2): Chest {
-  const types = [ChestType.Health, ChestType.XPRange, ChestType.MaxHP];
+  const types = [ChestType.Health, ChestType.MaxHP, ChestType.MoveSpeed, ChestType.XPRange, ChestType.XP];
   const type = types[Math.floor(Math.random() * types.length)];
   return {
     id: `chest_${nextChestId++}`,

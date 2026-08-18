@@ -4,7 +4,10 @@ import {
   Graphics,
   Particle,
   ParticleContainer,
+  Sprite,
   Text,
+  Texture,
+  CanvasSource,
 } from 'pixi.js';
 import {
   GameState,
@@ -30,6 +33,10 @@ import {
   AUXILIARY_WEAPON_CONFIGS,
   INITIAL_WEAPON_POOL,
   MAX_AUX_SLOTS,
+  STAGE_DURATION,
+  COINS_PER_KILL,
+  PAUSE_EXIT_BTN,
+  NEXT_STAGE_BTN,
 } from '../game/types';
 import { ParticleSystem, createGlowTexture } from './particles';
 
@@ -59,7 +66,7 @@ function makeText(text: string, style: object, anchorX = 0, anchorY = 0.5): Text
 }
 
 interface EnemyGfx {
-  body: Graphics;
+  body: Sprite;
   bar: Graphics;
 }
 
@@ -106,7 +113,7 @@ const PROJECTILE_COLORS: Record<string, number> = {
   [WeaponTypeId.Bow]: 0x8bc34a,
   missile: 0xff7043,
   aux_laser_gun: 0x00e5ff,
-  sword_energy: 0xab47bc,
+  sword_energy: 0x9fffff,
   turret: 0xffeb3b,
 };
 
@@ -129,6 +136,365 @@ const ENEMY_BURST_COLORS: Record<string, number> = {
   ranged: 0x64b5f6,
   exploder: 0xff8a65,
 };
+
+function drawSwordBlade(g: Graphics, color: number): void {
+  g.moveTo(16, 0)
+    .lineTo(0, -4.5)
+    .lineTo(-6, -3)
+    .lineTo(-8, 0)
+    .lineTo(-6, 3)
+    .lineTo(0, 4.5)
+    .closePath()
+    .fill({ color })
+    .stroke({ color: 0xffffff, width: 1.2, alpha: 0.9 });
+  g.moveTo(16, 0).lineTo(-7, 0).stroke({ color: 0xffffff, width: 1.6, alpha: 0.95 });
+  g.moveTo(-4, -6.5).lineTo(-4, 6.5).stroke({ color: 0x80deea, width: 2.2 });
+  g.moveTo(-4, 0).lineTo(-11, 0).stroke({ color: 0x84ffff, width: 2.4 });
+  g.circle(-11.5, 0, 1.8).fill({ color: 0xffffff });
+}
+
+function drawMine(g: Graphics, armed: boolean, explosionRadius: number): void {
+  g.clear();
+  g.circle(0, 0, explosionRadius).fill({ color: 0xff7043, alpha: 0.08 }).stroke({ color: 0xff5722, width: 1, alpha: 0.35 });
+  g.circle(0, 0, 5).fill({ color: armed ? 0xf44336 : 0x666666 }).stroke({ color: 0xffeb3b, width: 1 });
+}
+
+function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+function createCharacterTexture(): Texture {
+  const size = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const cx = size / 2;
+  const cy = size / 2;
+
+  // 地面阴影（水平，不随角色旋转）
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy + 28, 24, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 整个人物斜 45° 构图
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(Math.PI / 4);
+
+  // 后披风
+  const cape = ctx.createLinearGradient(0, -30, 0, 20);
+  cape.addColorStop(0, '#e53935');
+  cape.addColorStop(1, '#b71c1c');
+  ctx.fillStyle = cape;
+  ctx.beginPath();
+  ctx.moveTo(-14, -16);
+  ctx.quadraticCurveTo(-24, 6, -16, 24);
+  ctx.quadraticCurveTo(0, 30, 16, 24);
+  ctx.quadraticCurveTo(24, 6, 14, -16);
+  ctx.quadraticCurveTo(0, -20, -14, -16);
+  ctx.closePath();
+  ctx.fill();
+
+  // 双腿 + 靴子
+  ctx.fillStyle = '#2c3e50';
+  roundRectPath(ctx, -9, 10, 8, 17, 3);
+  ctx.fill();
+  roundRectPath(ctx, 1, 10, 8, 17, 3);
+  ctx.fill();
+  ctx.fillStyle = '#6d4c41';
+  roundRectPath(ctx, -10, 25, 10, 8, 3);
+  ctx.fill();
+  roundRectPath(ctx, 0, 25, 10, 8, 3);
+  ctx.fill();
+
+  // 躯干（铠甲上衣）
+  const body = ctx.createLinearGradient(0, -22, 0, 14);
+  body.addColorStop(0, '#5dade2');
+  body.addColorStop(1, '#2874a6');
+  ctx.fillStyle = body;
+  ctx.strokeStyle = '#1a5276';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-13, -6);
+  ctx.quadraticCurveTo(-13, -20, 0, -20);
+  ctx.quadraticCurveTo(13, -20, 13, -6);
+  ctx.quadraticCurveTo(12, 13, 0, 13);
+  ctx.quadraticCurveTo(-12, 13, -13, -6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // 胸甲高光
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.beginPath();
+  ctx.ellipse(-4, -12, 5, 8, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 腰带 + 扣
+  ctx.fillStyle = '#ffd54f';
+  ctx.fillRect(-13, 6, 26, 5);
+  ctx.fillStyle = '#f57f17';
+  ctx.fillRect(-3.5, 5, 7, 8);
+
+  // 手臂：右手持剑前举、左手在身侧
+  ctx.strokeStyle = '#2874a6';
+  ctx.lineWidth = 6;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(11, -6);
+  ctx.quadraticCurveTo(18, 0, 24, 6);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-11, -6);
+  ctx.quadraticCurveTo(-18, 2, -21, 8);
+  ctx.stroke();
+  ctx.fillStyle = '#f2c9a0';
+  ctx.beginPath();
+  ctx.arc(25, 7, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(-22, 9, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 剑（右手高举，斜 45° 上指）
+  ctx.save();
+  ctx.translate(25, 7);
+  ctx.rotate(-Math.PI / 4);
+  ctx.fillStyle = '#7e57c2';
+  roundRectPath(ctx, -2, -16, 4.5, 10, 2);
+  ctx.fill();
+  ctx.fillStyle = '#ffd54f';
+  roundRectPath(ctx, -5.5, -18, 11, 4.5, 2);
+  ctx.fill();
+  ctx.fillStyle = '#eef2f7';
+  ctx.strokeStyle = '#90a4ae';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(0, -46);
+  ctx.lineTo(-4.5, -17);
+  ctx.lineTo(4.5, -17);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(0, -44);
+  ctx.lineTo(0, -18);
+  ctx.stroke();
+  ctx.restore();
+
+  // 头 + 脸
+  ctx.fillStyle = '#e8a33d';
+  ctx.beginPath();
+  ctx.arc(-1, -30, 12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#f6c99b';
+  ctx.beginPath();
+  ctx.arc(-1, -29, 9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#263238';
+  ctx.beginPath();
+  ctx.arc(1, -31, 1.5, 0, Math.PI * 2);
+  ctx.arc(-3.5, -31, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#e8a33d';
+  ctx.beginPath();
+  ctx.arc(-1, -34, 11, Math.PI * 0.85, Math.PI * 1.15);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+
+  return new Texture({ source: new CanvasSource({ resource: canvas }) });
+}
+
+function eye(ctx: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#000000';
+  ctx.beginPath();
+  ctx.arc(x, y, r * 0.55, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function createEnemyTexture(configId: string): Texture {
+  const size = 96;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const c = size / 2;
+  // 与角色一致的斜 45° 构图；主体白色，方便后续按血量 tint 变色
+  ctx.save();
+  ctx.translate(c, c);
+  ctx.rotate(Math.PI / 4);
+
+  const dark = '#141414';
+  const body = '#ffffff';
+
+  switch (configId) {
+    case 'walker': {
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.arc(0, -4, 24, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(0, 12, 22, 12, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = 4;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(-10, -20);
+      ctx.quadraticCurveTo(-14, -34, -6, -36);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(10, -20);
+      ctx.quadraticCurveTo(14, -34, 6, -36);
+      ctx.stroke();
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.arc(-6, -36, 3, 0, Math.PI * 2);
+      ctx.arc(6, -36, 3, 0, Math.PI * 2);
+      ctx.fill();
+      eye(ctx, -11, -8, 7);
+      eye(ctx, 11, -8, 7);
+      break;
+    }
+    case 'runner': {
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.ellipse(0, 6, 27, 15, 0.15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(26, -2, 12, -Math.PI / 2, Math.PI / 2);
+      ctx.fill();
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(-24, 8);
+      ctx.quadraticCurveTo(-38, 2, -34, -12);
+      ctx.stroke();
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.moveTo(-4, -16);
+      ctx.lineTo(2, -34);
+      ctx.lineTo(10, -16);
+      ctx.closePath();
+      ctx.fill();
+      eye(ctx, 18, -8, 6);
+      break;
+    }
+    case 'tank': {
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.ellipse(0, 2, 32, 26, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(0, -24);
+      ctx.quadraticCurveTo(-8, 0, 0, 24);
+      ctx.stroke();
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(0, 2, 20, 16, 0.3, 0, Math.PI * 2);
+      ctx.stroke();
+      eye(ctx, -12, -6, 4);
+      eye(ctx, 12, -6, 4);
+      break;
+    }
+    case 'ranged': {
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.arc(0, 0, 30, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.arc(0, -6, 16, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.arc(0, -6, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.arc(0, -6, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(0, 14, 6, 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case 'exploder': {
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = 6;
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * 22, Math.sin(a) * 22);
+        ctx.lineTo(Math.cos(a) * 34, Math.sin(a) * 34);
+        ctx.stroke();
+      }
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.arc(0, 0, 24, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(0, -26);
+      ctx.quadraticCurveTo(6, -38, 16, -34);
+      ctx.stroke();
+      eye(ctx, -9, -5, 6);
+      eye(ctx, 9, -5, 6);
+      break;
+    }
+    default: {
+      // mini_boss：大恶魔（双角 + 粗眉 + 咧嘴）
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.ellipse(0, 6, 34, 30, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.moveTo(-18, -16);
+      ctx.lineTo(-10, -38);
+      ctx.lineTo(-28, -26);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(18, -16);
+      ctx.lineTo(10, -38);
+      ctx.lineTo(28, -26);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(-12, -6, 5, 0, Math.PI * 2);
+      ctx.arc(12, -6, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(0, 14, 8, 0, Math.PI);
+      ctx.fill();
+      break;
+    }
+  }
+
+  ctx.restore();
+  return new Texture({ source: new CanvasSource({ resource: canvas }) });
+}
 
 const RARITY_COLOR_NUM: Record<string, number> = {
   common: 0x4caf50,
@@ -165,6 +531,7 @@ export class PixiRenderer {
   private readonly slashC = new Container();
   private readonly beamC = new Container();
   private readonly windwheelC = new Container();
+  private readonly bladeC = new Container();
   private readonly projC = new ParticleContainer({
     texture: createGlowTexture(),
     dynamicProperties: { position: true, rotation: true, color: true, vertex: false, uvs: false },
@@ -178,16 +545,17 @@ export class PixiRenderer {
   private readonly enemies = new Map<string, EnemyGfx>();
   private readonly chests = new Map<string, ChestGfx>();
   private readonly turrets = new Map<string, TurretGfx>();
-  private readonly landMines = new Map<string, { gfx: Graphics; armed: boolean }>();
+  private readonly landMines = new Map<string, { gfx: Graphics; armed: boolean; radius: number }>();
   private readonly slashes = new Map<string, SlashGfx>();
   private readonly beams = new Map<string, Graphics>();
   private readonly damages = new Map<string, Text>();
   private readonly projectiles = new Map<string, Particle>();
+  private readonly blades = new Map<string, Graphics>();
   private readonly xpDrops = new Map<string, Particle>();
   private readonly windwheels = new Map<number, WindWheelSlot>();
 
   private readonly charGroup = new Container();
-  private readonly charGfx = new Graphics();
+  private readonly charSprite = new Sprite(createCharacterTexture());
 
   // HUD 元素
   private hudBuilt = false;
@@ -197,11 +565,14 @@ export class PixiRenderer {
   private readonly hudSlotLvs: Text[] = [];
   private readonly hudRings: Graphics[] = [];
   private readonly hudBars: Graphics[] = [];
-  private readonly hudTexts: { level: Text; hp: Text; kills: Text; invincible: Text } = {
+  private readonly hudTexts: { level: Text; hp: Text; kills: Text; invincible: Text; timer: Text; stage: Text; coins: Text } = {
     level: makeText('', FONT_14),
     hp: makeText('', FONT_14),
-    kills: makeText('', FONT_14),
+    kills: makeText('', FONT_14, 1, 0.5),
     invincible: makeText('无敌', FONT_12, 0.5, 0.5),
+    timer: makeText('10:00', FONT_14, 0.5, 0.5),
+    stage: makeText('', FONT_14),
+    coins: makeText('', FONT_14),
   };
 
   private cameraX = 0;
@@ -211,6 +582,7 @@ export class PixiRenderer {
   private prevPhase: GamePhase | null = null;
   private prevEnemies = new Map<string, Enemy>();
   private prevProjectiles = new Map<string, Projectile>();
+  private prevLandMines = new Map<string, { id: string; x: number; y: number }>();
   private prevXp = new Set<string>();
   private prevXpData = new Map<string, XPDrop>();
   private prevLevel = 0;
@@ -277,6 +649,7 @@ export class PixiRenderer {
       this.charGroup,
       this.windwheelC,
       this.projC,
+      this.bladeC,
     );
 
     this.app.stage.addChild(this.gridGfx, this.cameraGroup, this.hudC, this.menuC, this.flashGfx);
@@ -299,40 +672,19 @@ export class PixiRenderer {
     border.rect(0, 0, MAP_WIDTH, MAP_HEIGHT).stroke({ color: 0xff4444, width: 3 });
     this.worldLayer.addChildAt(border, 0);
 
-    // 角色（朝向 +x，由容器旋转）
-    this.charGfx.rect(-8, 6, 5, 6).fill({ color: 0x5d4037 });
-    this.charGfx.rect(3, 6, 5, 6).fill({ color: 0x5d4037 });
-    this.charGfx
-      .moveTo(-12, 4)
-      .lineTo(8, 4)
-      .lineTo(8, -4)
-      .lineTo(-12, -4)
-      .closePath()
-      .fill({ color: 0x4fc3f7 })
-      .stroke({ color: 0x2980b9, width: 1.5 });
-    this.charGfx.rect(-4, -4, 2, 8).fill({ color: 0x2980b9 });
-    this.charGfx.rect(2, -4, 2, 8).fill({ color: 0x2980b9 });
-    this.charGfx.circle(10, 0, 7).fill({ color: 0xf5d0a9 }).stroke({ color: 0x8d6e63, width: 1.5 });
-    this.charGfx.circle(12, -2, 2.5).fill({ color: 0xffffff }).stroke({ color: 0x333333, width: 1 });
-    this.charGfx.circle(12, 2, 2.5).fill({ color: 0xffffff }).stroke({ color: 0x333333, width: 1 });
-    this.charGfx.circle(12, -2, 1.2).fill({ color: 0x333333 });
-    this.charGfx.circle(12, 2, 1.2).fill({ color: 0x333333 });
-    this.charGfx
-      .moveTo(16, -4)
-      .lineTo(26, 0)
-      .lineTo(16, 4)
-      .closePath()
-      .fill({ color: 0x4fc3f7 })
-      .stroke({ color: 0x2980b9, width: 2 });
-    this.charGfx.rect(-6, -10, 4, 6).fill({ color: 0x8d6e63 });
-    this.charGfx.rect(2, -10, 4, 6).fill({ color: 0x8d6e63 });
-    this.charGroup.addChild(this.charGfx);
+    // 角色精灵（面向 +x，由容器旋转对准攻击方向）
+    this.charSprite.anchor.set(0.5, 0.5);
+    this.charSprite.scale.set(0.5);
+    this.charGroup.addChild(this.charSprite);
 
     // HUD 初始文本摆放
-    this.hudTexts.level.position.set(10, 25);
-    this.hudTexts.hp.position.set(100, 25);
-    this.hudTexts.kills.position.set(400, 25);
-    this.hudTexts.invincible.position.set(SCREEN_WIDTH / 2, 80);
+    this.hudTexts.level.position.set(8, 12);
+    this.hudTexts.hp.position.set(70, 12);
+    this.hudTexts.stage.position.set(180, 12);
+    this.hudTexts.coins.position.set(260, 12);
+    this.hudTexts.kills.position.set(SCREEN_WIDTH - 8, 12);
+    this.hudTexts.timer.position.set(SCREEN_WIDTH / 2, 12);
+    this.hudTexts.invincible.position.set(SCREEN_WIDTH / 2, 40);
     this.hudTexts.invincible.visible = false;
   }
 
@@ -500,7 +852,8 @@ export class PixiRenderer {
       let c = this.chests.get(chest.id);
       if (!c) {
         const gfx = new Graphics();
-        gfx.rect(-6, -6, 12, 12).fill({ color: 0xff9800 }).stroke({ color: 0xffc107, width: 2 });
+        const style = CHEST_COLORS[chest.type] ?? CHEST_COLORS[ChestType.Health];
+        gfx.rect(-6, -6, 12, 12).fill({ color: style.fill }).stroke({ color: style.stroke, width: 2 });
         const label = makeText(chestLabel(chest.type), FONT_10, 0.5, 0.5);
         label.position.set(0, 3);
         gfx.addChild(label);
@@ -552,14 +905,14 @@ export class PixiRenderer {
       let entry = this.landMines.get(m.id);
       if (!entry) {
         const gfx = new Graphics();
-        gfx.circle(0, 0, 5).fill({ color: m.armed ? 0xf44336 : 0x666666 }).stroke({ color: 0xffeb3b, width: 1 });
-        entry = { gfx, armed: m.armed };
+        drawMine(gfx, m.armed, m.explosionRadius);
+        entry = { gfx, armed: m.armed, radius: m.explosionRadius };
         this.landMines.set(m.id, entry);
         this.mineC.addChild(gfx);
-      } else if (entry.armed !== m.armed) {
+      } else if (entry.armed !== m.armed || entry.radius !== m.explosionRadius) {
         entry.armed = m.armed;
-        entry.gfx.clear();
-        entry.gfx.circle(0, 0, 5).fill({ color: m.armed ? 0xf44336 : 0x666666 }).stroke({ color: 0xffeb3b, width: 1 });
+        entry.radius = m.explosionRadius;
+        drawMine(entry.gfx, m.armed, m.explosionRadius);
       }
       entry.gfx.position.set(m.position.x, m.position.y);
     }
@@ -578,12 +931,17 @@ export class PixiRenderer {
       seen.add(e.id);
       let eg = this.enemies.get(e.id);
       if (!eg) {
-        eg = { body: new Graphics(), bar: new Graphics() };
+        eg = { body: new Sprite(createEnemyTexture(e.configId)), bar: new Graphics() };
+        eg.body.anchor.set(0.5, 0.5);
         this.enemies.set(e.id, eg);
         this.enemyC.addChild(eg.body, eg.bar);
       }
       eg.body.position.set(e.position.x, e.position.y);
-      this.redrawEnemy(eg.body, e);
+      eg.body.scale.set(e.size / 30);
+      const ratio = clamp01(e.health / e.maxHealth);
+      const r = Math.floor(200 * (1 - ratio) + 100);
+      const gl = Math.floor(100 * ratio);
+      eg.body.tint = rgb(r, gl, 40);
       eg.bar.position.set(e.position.x, e.position.y - e.size - 10);
       this.redrawEnemyBar(eg.bar, e);
     }
@@ -594,108 +952,6 @@ export class PixiRenderer {
         eg.bar.destroy();
         this.enemies.delete(id);
       }
-    }
-  }
-
-  private redrawEnemy(g: Graphics, e: Enemy): void {
-    g.clear();
-    const s = e.size;
-    if (e.isMiniBoss) {
-      g.circle(0, 0, s).fill({ color: 0xc0392b }).stroke({ color: 0xe74c3c, width: 3 });
-      g.moveTo(-s * 0.8, -s * 0.9).lineTo(0, -s * 1.4).lineTo(s * 0.8, -s * 0.9).closePath()
-        .fill({ color: 0x8e44ad });
-      for (const sx of [-1, 1]) {
-        g.circle(sx * s * 0.3, -s * 0.1, 4).fill({ color: 0xf1c40f });
-        g.circle(sx * s * 0.3, -s * 0.1, 2).fill({ color: 0x000000 });
-      }
-      return;
-    }
-
-    const healthRatio = clamp01(e.health / e.maxHealth);
-    const r = Math.floor(200 * (1 - healthRatio) + 100);
-    const gl = Math.floor(100 * healthRatio);
-
-    switch (e.configId) {
-      case 'walker': {
-        const body = rgb(r, gl, 50);
-        const light = rgb(r + 30, gl + 30, 50);
-        g.circle(0, 0, s).fill({ color: body }).stroke({ color: light, width: 2 });
-        g.rect(-s * 0.2, s * 0.3, s * 0.4, s * 0.6).fill({ color: light });
-        this.redrawEnemyEyes(g, s, 0xcc0000);
-        g.circle(-s * 0.4, -s * 0.3, 2).fill({ color: rgb(r + 20, gl + 20, 40) });
-        g.circle(s * 0.4, -s * 0.3, 2).fill({ color: rgb(r + 20, gl + 20, 40) });
-        break;
-      }
-      case 'runner': {
-        const body = rgb(r + 50, gl, 80);
-        const light = rgb(r + 80, gl + 30, 80);
-        g.ellipse(0, 0, s * 1.2, s * 0.7).fill({ color: body }).stroke({ color: light, width: 2 });
-        g.rect(-s * 0.5, s * 0.3, s * 0.3, s * 0.5).fill({ color: light });
-        g.rect(s * 0.2, s * 0.3, s * 0.3, s * 0.5).fill({ color: light });
-        this.redrawEnemyEyes(g, s, 0x8800aa);
-        break;
-      }
-      case 'tank': {
-        const body = rgb(r - 30, gl, 30);
-        const light = rgb(r, gl + 30, 30);
-        g.rect(-s * 0.9, -s * 0.7, s * 1.8, s * 1.4).fill({ color: body }).stroke({ color: light, width: 3 });
-        g.rect(-s * 0.7, -s * 0.3, s * 0.3, s * 0.3).fill({ color: rgb(r - 10, gl + 10, 20) });
-        g.rect(s * 0.4, -s * 0.3, s * 0.3, s * 0.3).fill({ color: rgb(r - 10, gl + 10, 20) });
-        g.rect(-s * 0.7, s * 0.2, s * 1.4, s * 0.2).fill({ color: rgb(r - 10, gl + 10, 20) });
-        this.redrawEnemyEyes(g, s, 0xaa4400);
-        break;
-      }
-      case 'ranged': {
-        const body = rgb(r - 20, gl + 30, 80);
-        const light = rgb(r + 10, gl + 60, 80);
-        g.circle(0, 0, s).fill({ color: body }).stroke({ color: light, width: 2 });
-        g.rect(s * 0.5, -3, s * 0.8, 6).fill({ color: light });
-        g.rect(s * 0.3, -5, s * 0.2, 10).fill({ color: rgb(r + 30, gl + 80, 80) });
-        this.redrawEnemyEyes(g, s, 0x0055aa);
-        break;
-      }
-      case 'exploder': {
-        const body = rgb(r + 60, gl - 20, 20);
-        const light = rgb(r + 90, gl + 10, 20);
-        this.redrawStar(g, s, body, light);
-        g.circle(0, 0, s * 0.4).fill({ color: rgb(r + 90, gl - 10, 10) });
-        for (const sx of [-1, 1]) {
-          g.circle(sx * s * 0.2, -s * 0.1, 3).fill({ color: 0xffffff });
-          g.circle(sx * s * 0.2, -s * 0.1, 1.5).fill({ color: 0x000000 });
-        }
-        break;
-      }
-      default: {
-        g.circle(0, 0, s).fill({ color: rgb(r, gl, 50) });
-        this.redrawEnemyEyes(g, s, 0xff0000);
-        break;
-      }
-    }
-  }
-
-  private redrawStar(g: Graphics, s: number, body: number, light: number): void {
-    let pts: number[] = [];
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2 - Math.PI / 2;
-      const rr = i % 2 === 0 ? s * 1.3 : s * 0.9;
-      pts.push(Math.cos(a) * rr, Math.sin(a) * rr);
-    }
-    g.poly(pts, true).fill({ color: body });
-    pts = [];
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2 - Math.PI / 2;
-      const rr = i % 2 === 0 ? s * 1.3 : s * 0.9;
-      pts.push(Math.cos(a) * rr, Math.sin(a) * rr);
-    }
-    g.poly(pts, true).stroke({ color: light, width: 2 });
-  }
-
-  private redrawEnemyEyes(g: Graphics, size: number, color: number): void {
-    const eyeOff = size * 0.3;
-    const eyeR = size * 0.12;
-    for (const sx of [-1, 1]) {
-      g.circle(sx * eyeOff, -eyeOff * 0.4, eyeR).fill({ color: 0xffffff });
-      g.circle(sx * eyeOff, -eyeOff * 0.4, eyeR * 0.6).fill({ color });
     }
   }
 
@@ -847,8 +1103,26 @@ export class PixiRenderer {
 
   private syncProjectiles(projectiles: Projectile[], elapsed: number): void {
     const seen = new Set<string>();
+    let bladeCount = 0;
     for (const proj of projectiles) {
       seen.add(proj.id);
+      if (proj.weaponType === ('sword_energy' as any)) {
+        // 剑气：匕首造型实体
+        const angle = Math.atan2(proj.velocity.y, proj.velocity.x);
+        let b = this.blades.get(proj.id);
+        if (!b) {
+          b = new Graphics();
+          drawSwordBlade(b, 0x9fffff);
+          this.bladeC.addChild(b);
+          this.blades.set(proj.id, b);
+        }
+        b.position.set(proj.position.x, proj.position.y);
+        b.rotation = angle;
+        const pulse = 1 + Math.sin(elapsed * 18 + proj.id.length * 3) * 0.08;
+        b.scale.set(pulse);
+        bladeCount++;
+        continue;
+      }
       let p = this.projectiles.get(proj.id);
       if (!p) {
         p = new Particle({
@@ -898,6 +1172,20 @@ export class PixiRenderer {
         this.projectiles.delete(id);
       }
     }
+    // 清理消失的剑气实体（当 blades 数量异常膨胀时也一并清理）
+    if (bladeCount === 0 && this.blades.size > 0) {
+      for (const [id, b] of this.blades) {
+        this.bladeC.removeChild(b);
+      }
+      this.blades.clear();
+    } else {
+      for (const [id, b] of this.blades) {
+        if (!seen.has(id)) {
+          this.bladeC.removeChild(b);
+          this.blades.delete(id);
+        }
+      }
+    }
   }
 
   private updateCharacter(state: GameState): void {
@@ -917,6 +1205,8 @@ export class PixiRenderer {
     if (!this.seeded) return;
 
     const curEnemies = new Map(state.enemies.map((e) => [e.id, e]));
+    const curProjectiles = new Set(state.projectiles.map((p) => p.id));
+    const curLandMines = new Set(state.landMines.map((m) => m.id));
 
     // 敌人死亡 → 爆裂
     for (const [id, pe] of this.prevEnemies) {
@@ -1004,6 +1294,70 @@ export class PixiRenderer {
         });
         muzzleCount++;
       }
+    }
+
+    // 爆炸弹丸消失（命中/触界）→ 爆炸火光
+    for (const [, pe] of this.prevProjectiles) {
+      if (pe.explosionRadius > 0 && !curProjectiles.has(pe.id)) {
+        this.fx.burst({
+          x: pe.position.x, y: pe.position.y,
+          count: 18, color: 0xffa726,
+          speedMin: 60, speedMax: 260, sizeMin: 2, sizeMax: 5,
+          lifeMin: 0.2, lifeMax: 0.5, drag: 0.9, additive: true,
+        });
+        this.addShake(3, 0.2);
+      }
+    }
+
+    // 地雷引爆（从场景中消失）→ 橙红爆炸粒子
+    for (const [, pm] of this.prevLandMines) {
+      if (!curLandMines.has(pm.id)) {
+        this.fx.burst({
+          x: pm.x, y: pm.y,
+          count: 24, color: 0xff7043,
+          speedMin: 50, speedMax: 260, sizeMin: 2, sizeMax: 5,
+          lifeMin: 0.25, lifeMax: 0.6, drag: 0.9, additive: true,
+        });
+        this.addShake(5, 0.3);
+      }
+    }
+
+    // 剑气：匕首流光拖尾
+    for (const proj of state.projectiles) {
+      if (proj.weaponType !== ('sword_energy' as any)) continue;
+      const back = Math.atan2(proj.velocity.y, proj.velocity.x) + Math.PI + (Math.random() - 0.5) * 0.8;
+      const dist = 6 + Math.random() * 10;
+      this.fx.spawn(
+        proj.position.x + Math.cos(back) * dist,
+        proj.position.y + Math.sin(back) * dist,
+        {
+          color: Math.random() < 0.5 ? 0x9fffff : 0x4dd0ff,
+          additive: true, angle: back, spread: 0.6,
+          speedMin: 10, speedMax: 60,
+          sizeMin: 1.5, sizeMax: 3,
+          lifeMin: 0.15, lifeMax: 0.35,
+          drag: 0.93, alpha: 0.8,
+        },
+      );
+    }
+
+    // 导弹：尾焰拖尾（橙红火苗 + 白热核心）
+    for (const proj of state.projectiles) {
+      if (proj.weaponType !== ('missile' as any)) continue;
+      const back = Math.atan2(proj.velocity.y, proj.velocity.x) + Math.PI + (Math.random() - 0.5) * 0.5;
+      const dist = 4 + Math.random() * 8;
+      this.fx.spawn(
+        proj.position.x + Math.cos(back) * dist,
+        proj.position.y + Math.sin(back) * dist,
+        {
+          color: Math.random() < 0.6 ? 0xff7043 : 0xffe0b2,
+          additive: true, angle: back, spread: 0.8,
+          speedMin: 20, speedMax: 90,
+          sizeMin: 2, sizeMax: 4,
+          lifeMin: 0.15, lifeMax: 0.4,
+          drag: 0.92, alpha: 0.9,
+        },
+      );
     }
 
     // 火焰喷射器持续余烬
@@ -1133,6 +1487,7 @@ export class PixiRenderer {
         // 进入游玩：直接铺底，避免进场瞬间误触发特效
         this.prevEnemies = new Map(state.enemies.map((e) => [e.id, e]));
         this.prevProjectiles = new Map(state.projectiles.map((p) => [p.id, p]));
+        this.prevLandMines = new Map(state.landMines.map((m) => [m.id, { id: m.id, x: m.position.x, y: m.position.y }]));
         this.prevXp = new Set(state.xpDrops.map((d) => d.id));
         this.prevXpData = new Map(state.xpDrops.map((d) => [d.id, d]));
         this.prevLevel = state.character.level;
@@ -1150,6 +1505,7 @@ export class PixiRenderer {
 
     this.prevEnemies = new Map(state.enemies.map((e) => [e.id, e]));
     this.prevProjectiles = new Map(state.projectiles.map((p) => [p.id, p]));
+    this.prevLandMines = new Map(state.landMines.map((m) => [m.id, { id: m.id, x: m.position.x, y: m.position.y }]));
     this.prevXp = new Set(state.xpDrops.map((d) => d.id));
     this.prevXpData = new Map(state.xpDrops.map((d) => [d.id, d]));
     this.prevLevel = state.character.level;
@@ -1163,10 +1519,10 @@ export class PixiRenderer {
 
   private buildHud(): void {
     const topBar = new Graphics();
-    topBar.rect(0, 0, SCREEN_WIDTH, 65).fill({ color: 0x000000, alpha: 0.5 });
+    topBar.rect(0, 0, SCREEN_WIDTH, 24).fill({ color: 0x000000, alpha: 0.5 });
     this.hudC.addChild(topBar);
 
-    this.hudC.addChild(this.hudTexts.level, this.hudTexts.hp, this.hudTexts.kills, this.hudTexts.invincible);
+    this.hudC.addChild(this.hudTexts.level, this.hudTexts.hp, this.hudTexts.kills, this.hudTexts.invincible, this.hudTexts.timer, this.hudTexts.stage, this.hudTexts.coins);
 
     // 武器槽（主武器 + 2 个副武器槽）
     for (let i = 0; i < 1 + MAX_AUX_SLOTS; i++) {
@@ -1197,14 +1553,21 @@ export class PixiRenderer {
     const char = state.character;
     this.hudTexts.level.text = `等级 ${char.level}`;
     this.hudTexts.hp.text = `生命: ${Math.floor(char.health)}/${char.maxHealth}`;
-    this.hudTexts.kills.text = `击杀: ${char.killCount}`;
+    this.hudTexts.kills.text = `击杀 ${char.killCount} | 本关 ${state.stageKillCount}`;
+    this.hudTexts.stage.text = `关卡 ${state.stageLevel}`;
+    this.hudTexts.coins.text = `金币 ${state.coins}`;
+    const remain = Math.max(0, Math.ceil(STAGE_DURATION - state.stageElapsedTime));
+    const mm = Math.floor(remain / 60).toString().padStart(2, '0');
+    const ss = (remain % 60).toString().padStart(2, '0');
+    this.hudTexts.timer.text = `${mm}:${ss}`;
     this.hudTexts.invincible.visible = char.invincibleTimer > 0;
 
-    const slotY = 42;
     const slotW = 50;
     const slotH = 22;
     const slotGap = 4;
-    const slotX0 = 10;
+    const slotsCount = 1 + MAX_AUX_SLOTS;
+    const slotY = SCREEN_HEIGHT - slotH - 10;
+    const slotX0 = SCREEN_WIDTH - 8 - (slotsCount * slotW + (slotsCount - 1) * slotGap);
 
     const main = char.mainWeapon;
     const mainConfig = WEAPON_CONFIGS[main.typeId];
@@ -1327,6 +1690,9 @@ export class PixiRenderer {
       case GamePhase.Paused:
         key = 'pause';
         break;
+      case GamePhase.LevelComplete:
+        key = `lc:${state.lastStageResult ? `${state.lastStageResult.stage}:${state.lastStageResult.kills}:${state.lastStageResult.coinsEarned}` : ''}:${Math.ceil(state.nextStageCountdown)}`;
+        break;
       default:
         break;
     }
@@ -1351,6 +1717,9 @@ export class PixiRenderer {
       case GamePhase.Paused:
         this.drawPause(this.menuC, state);
         break;
+      case GamePhase.LevelComplete:
+        this.drawLevelComplete(this.menuC, state);
+        break;
     }
   }
 
@@ -1362,6 +1731,10 @@ export class PixiRenderer {
     const title = makeText('选择你的武器', { fontFamily: MONO, fontSize: 24, fill: 0xffffff }, 0.5, 0.5);
     title.position.set(SCREEN_WIDTH / 2, 80);
     c.addChild(title);
+
+    const coinText = makeText(`金币: ${state.coins}`, { fontFamily: MONO, fontSize: 16, fontWeight: 'bold', fill: 0xffc107 }, 0.5, 0.5);
+    coinText.position.set(SCREEN_WIDTH / 2, 118);
+    c.addChild(coinText);
 
     const weapons = INITIAL_WEAPON_POOL;
     const boxWidth = 150;
@@ -1482,6 +1855,62 @@ export class PixiRenderer {
     c.addChild(hint);
   }
 
+  private drawLevelComplete(c: Container, state: GameState): void {
+    const g = new Graphics();
+    g.rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT).fill({ color: 0x000000, alpha: 0.7 });
+    c.addChild(g);
+
+    const result = state.lastStageResult ?? { stage: state.stageLevel, kills: state.stageKillCount, coinsEarned: 0 };
+    const earned = Math.floor(result.kills * result.stage * COINS_PER_KILL);
+
+    const title = makeText(`第 ${result.stage} 关完成！`, { fontFamily: MONO, fontSize: 26, fontWeight: 'bold', fill: 0xffc107 }, 0.5, 0.5);
+    title.position.set(SCREEN_WIDTH / 2, 120);
+    c.addChild(title);
+
+    const panelW = 360;
+    const panelX = (SCREEN_WIDTH - panelW) / 2;
+    const panel = new Graphics();
+    panel.rect(panelX, 170, panelW, 170).fill({ color: 0x111122, alpha: 0.9 });
+    panel.rect(panelX, 170, panelW, 170).stroke({ color: 0xffc107, alpha: 0.5, width: 1.5 });
+    c.addChild(panel);
+
+    const rows: [string, string, number][] = [
+      ['本关击杀', `${result.kills}`, 0x4fc3f7],
+      ['关卡等级', `${result.stage}`, 0xffeb3b],
+      ['公式', `${result.kills} × ${result.stage} × ${COINS_PER_KILL}`, 0xaaaaaa],
+      ['获得金币', `+${earned}`, 0x76ff03],
+      ['总金币', `${state.coins}`, 0xffc107],
+    ];
+    rows.forEach(([label, value, color], idx) => {
+      const y = 192 + idx * 26;
+      const lt = makeText(label, FONT_12, 0, 0.5);
+      lt.position.set(panelX + 16, y);
+      lt.style.fill = 0x8899aa;
+      c.addChild(lt);
+      const vt = makeText(value, FONT_12, 1, 0.5);
+      vt.position.set(panelX + panelW - 16, y);
+      vt.style.fill = color;
+      c.addChild(vt);
+    });
+
+    const btn = NEXT_STAGE_BTN;
+    const btnGfx = new Graphics();
+    btnGfx.rect(btn.x, btn.y, btn.w, btn.h).fill({ color: 0xffc107 });
+    btnGfx.rect(btn.x, btn.y, btn.w, btn.h).stroke({ color: 0xffffff, width: 2 });
+    c.addChild(btnGfx);
+    const nextLabel = makeText(`下一关 (第 ${result.stage + 1} 关)`, { fontFamily: MONO, fontSize: 14, fontWeight: 'bold', fill: 0x111111 }, 0.5, 0.5);
+    nextLabel.position.set(btn.x + btn.w / 2, btn.y + btn.h / 2);
+    c.addChild(nextLabel);
+
+    const countdownTxt = makeText(`${Math.ceil(state.nextStageCountdown)} 秒后自动开始...`, { fontFamily: MONO, fontSize: 12, fill: 0x8899aa }, 0.5, 0.5);
+    countdownTxt.position.set(SCREEN_WIDTH / 2, btn.y + btn.h + 28);
+    c.addChild(countdownTxt);
+
+    const hint = makeText('回车 立即开始', { fontFamily: MONO, fontSize: 12, fill: 0x888888 }, 0.5, 0.5);
+    hint.position.set(SCREEN_WIDTH / 2, btn.y + btn.h + 48);
+    c.addChild(hint);
+  }
+
   private drawPause(c: Container, state: GameState): void {
     const g = new Graphics();
     g.rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT).fill({ color: 0x000000, alpha: 0.4 });
@@ -1517,12 +1946,12 @@ export class PixiRenderer {
       y += rowH;
     };
 
+    drawStat('关卡', `第 ${state.stageLevel} 关`, 0xffc107);
     drawStat('等级', `${char.level}`, 0x4fc3f7);
     drawStat('生命', `${Math.floor(char.health)} / ${char.maxHealth}`, 0x4caf50);
-    drawStat('经验', `${Math.floor(char.xp)} / ${char.xpToNextLevel}`, 0x76ff03);
     drawStat('击杀', `${char.killCount}`, 0xff9800);
-    drawStat('经验范围', `${char.xpAbsorptionRadius}`, 0xce93d8);
-    drawStat('移动速度', `${char.speed}`, 0x81d4fa);
+    drawStat('经验', `${Math.floor(char.xp)} / ${char.xpToNextLevel}`, 0x76ff03);
+    drawStat('金币', `${state.coins}`, 0xffc107);
     y += 10;
 
     const drawMainWeaponBlock = () => {
@@ -1549,52 +1978,83 @@ export class PixiRenderer {
       drawStat('伤害', `${w.stats.damage}`, 0xef5350);
       drawStat('攻速', `${w.stats.fireRate}`, 0xab47bc);
       drawStat('范围', `${w.stats.range}`, 0x26c6da);
-      if (!isMelee) {
-        drawStat('换弹', `${w.stats.reloadSpeed.toFixed(1)}s`, 0xff9800);
-        drawStat('穿透', `${w.stats.penetration}`, 0x7e57c2);
-        drawStat('弹数', `${w.stats.bulletCount}`, 0x66bb6a);
-        drawStat('弹匣', `${w.stats.magazineCapacity}`, 0x42a5f5);
-      } else {
-        const angleDeg = ((config.attackArc ?? Math.PI / 2) * 180 / Math.PI).toFixed(0);
-        drawStat('扇形角', `${angleDeg}°`, 0xff7043);
-      }
+      drawStat('换弹', isMelee ? '-' : `${w.stats.reloadSpeed.toFixed(1)}s`, isMelee ? 0xaaaaaa : 0xff9800);
       y += 8;
     };
 
-    const drawAuxWeaponBlock = (aux: typeof char.auxWeapons[0]) => {
+    const drawAuxTile = (aux: typeof char.auxWeapons[0], x: number, w: number) => {
       const config = AUXILIARY_WEAPON_CONFIGS[aux.typeId];
       const s = aux.stats;
+      const tileH = 118;
       const block = new Graphics();
-      block.rect(6, y, panelW - 12, 130).fill({ color: 0xffffff, alpha: 0.05 });
-      block.rect(6, y, panelW - 12, 130).stroke({ color: 0xffffff, alpha: 0.1, width: 1 });
-      block.rect(6, y, panelW - 12, 22).fill({ color: 0xce93d8 });
+      block.rect(x, y, w, tileH).fill({ color: 0xffffff, alpha: 0.05 });
+      block.rect(x, y, w, tileH).stroke({ color: 0xffffff, alpha: 0.1, width: 1 });
+      block.rect(x, y, w, 18).fill({ color: 0xce93d8 });
       c.addChild(block);
 
-      const name = makeText(config.name, { fontFamily: MONO, fontSize: 12, fontWeight: 'bold', fill: 0xffffff }, 0, 0.5);
-      name.position.set(16, y + 15);
+      const name = makeText(config.name, { fontFamily: MONO, fontSize: 10, fontWeight: 'bold', fill: 0xffffff }, 0, 0.5);
+      name.position.set(x + 6, y + 9);
       c.addChild(name);
-      const lv = makeText(`Lv.${aux.level}`, { fontFamily: MONO, fontSize: 12, fontWeight: 'bold', fill: 0xffffff }, 1, 0.5);
-      lv.position.set(panelW - 16, y + 15);
+      const lv = makeText(`Lv.${aux.level}`, { fontFamily: MONO, fontSize: 10, fontWeight: 'bold', fill: 0xffffff }, 1, 0.5);
+      lv.position.set(x + w - 6, y + 9);
       c.addChild(lv);
-      y += 28;
 
-      drawStat('伤害', `${s.damage}`, 0xef5350);
-      drawStat('范围', `${s.range}`, 0x26c6da);
-      drawStat('充能', `${s.cooldown.toFixed(1)}s`, 0xff9800);
-      drawStat('数量', `${s.count}`, 0x66bb6a);
-      if (s.explosionRadius > 0) drawStat('爆炸范围', `${s.explosionRadius}`, 0xff7043);
-      if (s.rotationSpeed > 0) drawStat('转速', `${s.rotationSpeed.toFixed(1)}`, 0xab47bc);
-      if (s.duration > 0) drawStat('持续', `${s.duration.toFixed(1)}s`, 0x42a5f5);
-      if (s.turretFireRate > 0) drawStat('炮台攻速', `${s.turretFireRate}`, 0x4fc3f7);
-      y += 8;
+      const lines: [string, string][] = [
+        ['伤害', `${Math.floor(s.damage * 10) / 10}`],
+        ['范围', `${Math.floor(s.range)}`],
+        ['数量', `${Math.floor(s.count)}`],
+      ];
+      if (s.explosionRadius > 0) lines.push(['爆炸', `${Math.floor(s.explosionRadius)}`]);
+      else if (s.rotationSpeed > 0) lines.push(['转速', `${s.rotationSpeed.toFixed(1)}`]);
+      else if (s.duration > 0) lines.push(['持续', `${s.duration.toFixed(1)}s`]);
+      else if (s.cooldown > 0) lines.push(['充能', `${s.cooldown.toFixed(1)}s`]);
+      else if (s.turretFireRate > 0) lines.push(['攻速', `${s.turretFireRate}`]);
+
+      lines.forEach(([label, value], idx) => {
+        const ty = y + 32 + idx * 20;
+        const lt = makeText(label, { fontFamily: MONO, fontSize: 10, fill: 0x8899aa }, 0, 0.5);
+        lt.position.set(x + 8, ty);
+        c.addChild(lt);
+        const vt = makeText(value, { fontFamily: MONO, fontSize: 10, fill: 0xeeeeee }, 1, 0.5);
+        vt.position.set(x + w - 8, ty);
+        c.addChild(vt);
+      });
     };
 
     drawMainWeaponBlock();
-    for (const aux of char.auxWeapons) drawAuxWeaponBlock(aux);
+
+    const auxHeader = makeText('辅助武器', { fontFamily: MONO, fontSize: 11, fontWeight: 'bold', fill: 0xce93d8 }, 0, 0.5);
+    y += 6;
+    auxHeader.position.set(12, y);
+    c.addChild(auxHeader);
+    y += 20;
+
+    if (char.auxWeapons.length === 0) {
+      const empty = makeText('暂无辅助武器', { fontFamily: MONO, fontSize: 11, fill: 0x666666 }, 0.5, 0.5);
+      empty.position.set(panelW / 2, y + 30);
+      c.addChild(empty);
+    } else {
+      const tileGap = 8;
+      const tileW = (panelW - 12 - tileGap) / 2;
+      char.auxWeapons.forEach((aux, i) => {
+        const x = 6 + i * (tileW + tileGap);
+        drawAuxTile(aux, x, tileW);
+      });
+    }
+    y += 118;
+
+    const btn = PAUSE_EXIT_BTN;
+    const btnGfx = new Graphics();
+    btnGfx.rect(btn.x, btn.y, btn.w, btn.h).fill({ color: 0xf44336 });
+    btnGfx.rect(btn.x, btn.y, btn.w, btn.h).stroke({ color: 0xffffff, width: 2 });
+    c.addChild(btnGfx);
+    const btnTxt = makeText('退出游戏', { fontFamily: MONO, fontSize: 14, fontWeight: 'bold', fill: 0xffffff }, 0.5, 0.5);
+    btnTxt.position.set(btn.x + btn.w / 2, btn.y + btn.h / 2);
+    c.addChild(btnTxt);
 
     const esc = makeText('ESC 继续', { fontFamily: MONO, fontSize: 11, fill: 0xffffff }, 0.5, 0.5);
     esc.alpha = 0.3;
-    esc.position.set(panelW / 2, SCREEN_HEIGHT - 15);
+    esc.position.set(panelW / 2, SCREEN_HEIGHT - 8);
     c.addChild(esc);
   }
 
@@ -1640,14 +2100,26 @@ function chestLabel(type: ChestType): string {
   switch (type) {
     case ChestType.Health:
       return '回血';
-    case ChestType.XPRange:
-      return '经验';
     case ChestType.MaxHP:
-      return '血量';
+      return '上限';
+    case ChestType.MoveSpeed:
+      return '移速';
+    case ChestType.XPRange:
+      return '范围';
+    case ChestType.XP:
+      return '经验';
     default:
       return '';
   }
 }
+
+const CHEST_COLORS: Record<ChestType, { fill: number; stroke: number }> = {
+  [ChestType.Health]: { fill: 0x66bb6a, stroke: 0xa5d6a7 },
+  [ChestType.MaxHP]: { fill: 0xef5350, stroke: 0xffcdd2 },
+  [ChestType.MoveSpeed]: { fill: 0x42a5f5, stroke: 0x90caf9 },
+  [ChestType.XPRange]: { fill: 0xfdd835, stroke: 0xfff59d },
+  [ChestType.XP]: { fill: 0xab47bc, stroke: 0xce93d8 },
+};
 
 function slashKeyOf(ef: SlashEffect): string {
   return `${ef.position.x.toFixed(1)},${ef.position.y.toFixed(1)},${ef.direction.toFixed(2)},${ef.arc.toFixed(2)},${ef.range.toFixed(1)}`;

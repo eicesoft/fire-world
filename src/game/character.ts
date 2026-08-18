@@ -16,17 +16,19 @@ import {
   MAP_HEIGHT,
   MINI_BOSS_KILL_THRESHOLD_BASE,
   MINI_BOSS_KILL_THRESHOLD_GROWTH,
+  WEAPON_CHARACTER_PRESETS,
   WeaponStats,
   AuxiliaryWeaponStats,
 } from './types';
 
 export function createCharacter(weaponType: WeaponTypeId): Character {
   const weapon = createWeapon(weaponType);
+  const preset = WEAPON_CHARACTER_PRESETS[weaponType] ?? { speedMultiplier: 1, health: BASE_MAX_HEALTH };
   return {
     position: { x: MAP_WIDTH / 2, y: MAP_HEIGHT / 2 },
-    health: BASE_MAX_HEALTH,
-    maxHealth: BASE_MAX_HEALTH,
-    speed: BASE_SPEED,
+    health: preset.health,
+    maxHealth: preset.health,
+    speed: BASE_SPEED * preset.speedMultiplier,
     mainWeapon: weapon,
     auxWeapons: [],
     maxAuxSlots: MAX_AUX_SLOTS,
@@ -91,4 +93,8 @@ export function increaseMaxHealth(char: Character, amount: number): void {
 
 export function addXpAbsorptionRadius(char: Character, amount: number): void {
   char.xpAbsorptionRadius += amount;
+}
+
+export function increaseSpeed(char: Character, amount: number): void {
+  char.speed += amount;
 }

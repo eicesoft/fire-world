@@ -14,6 +14,9 @@ export interface InputState {
   navLeftConsumed: boolean;
   navRight: boolean;
   navRightConsumed: boolean;
+  /** 导航/确认标志由手柄置位（用于防止手柄轮询误清键盘输入） */
+  navFromGamepad: boolean;
+  aFromGamepad: boolean;
 }
 
 export function createInputState(): InputState {
@@ -31,6 +34,8 @@ export function createInputState(): InputState {
     navLeftConsumed: false,
     navRight: false,
     navRightConsumed: false,
+    navFromGamepad: false,
+    aFromGamepad: false,
   };
 }
 
@@ -57,22 +62,35 @@ export function pollGamepad(input: InputState): void {
   input.rightStick = rLen > 1 ? { x: rx / rLen, y: ry / rLen } : { x: rx, y: ry };
 
   if (gp.buttons[0]?.pressed) {
-    if (!input.aConsumed) input.aPressed = true;
-  } else {
+    if (!input.aConsumed) {
+      input.aPressed = true;
+      input.aFromGamepad = true;
+    }
+  } else if (input.aFromGamepad) {
+    // 仅清理由手柄置位的确认标志，避免误吞键盘/鼠标交互
     input.aPressed = false;
     input.aConsumed = false;
+    input.aFromGamepad = false;
   }
 
   if (gp.buttons[14]?.pressed || gp.buttons[15]?.pressed) {
     const dLeft = gp.buttons[14]?.pressed ?? false;
     const dRight = gp.buttons[15]?.pressed ?? false;
-    if (dLeft && !input.navLeftConsumed) input.navLeft = true;
-    if (dRight && !input.navRightConsumed) input.navRight = true;
-  } else {
+    if (dLeft && !input.navLeftConsumed) {
+      input.navLeft = true;
+      input.navFromGamepad = true;
+    }
+    if (dRight && !input.navRightConsumed) {
+      input.navRight = true;
+      input.navFromGamepad = true;
+    }
+  } else if (input.navFromGamepad) {
+    // 仅清理由手柄置位的导航标志
     input.navLeft = false;
     input.navRight = false;
     input.navLeftConsumed = false;
     input.navRightConsumed = false;
+    input.navFromGamepad = false;
   }
 }
 
@@ -89,12 +107,15 @@ export function setupInputHandlers(
     input.keys.add(e.key.toLowerCase());
     if (e.key === 'ArrowLeft' && !input.navLeftConsumed) {
       input.navLeft = true;
+      input.navFromGamepad = false;
     }
     if (e.key === 'ArrowRight' && !input.navRightConsumed) {
       input.navRight = true;
+      input.navFromGamepad = false;
     }
     if (e.key === 'Enter' && !input.aConsumed) {
       input.aPressed = true;
+      input.aFromGamepad = false;
     }
   });
 
@@ -104,14 +125,17 @@ export function setupInputHandlers(
     if (e.key === 'ArrowLeft') {
       input.navLeft = false;
       input.navLeftConsumed = false;
+      input.navFromGamepad = false;
     }
     if (e.key === 'ArrowRight') {
       input.navRight = false;
       input.navRightConsumed = false;
+      input.navFromGamepad = false;
     }
     if (e.key === 'Enter') {
       input.aPressed = false;
       input.aConsumed = false;
+      input.aFromGamepad = false;
     }
   });
 

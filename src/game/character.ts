@@ -38,6 +38,8 @@ export function createCharacter(weaponType: WeaponTypeId): Character {
     killCount: 0,
     xpAbsorptionRadius: BASE_XP_ABSORPTION_RADIUS,
     invincibleTimer: 0,
+    critChance: 0,
+    doubleStrikeChance: 0,
   };
 }
 

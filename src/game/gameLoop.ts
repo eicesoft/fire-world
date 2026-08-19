@@ -19,12 +19,14 @@ import {
   STAGE_DURATION,
   COINS_PER_KILL,
   STAGE_NEXT_COUNTDOWN,
+  TALENT_POINTS_PER_STAGE,
 } from './types';
 import { createCharacter, getXpThreshold, getMiniBossKillThreshold, healCharacter, increaseMaxHealth, addXpAbsorptionRadius, increaseSpeed } from './character';
 import { applyDamage, respawnCharacter } from './combat';
 import { generateUpgradeOptions, applyUpgrade, generateWeaponDropOptions } from './upgrades';
 import { spawnEnemyWave, createXpDrop, createChest, generateObstacles, resetIds } from './spawner';
 import { loadCoins, addCoins } from './coins';
+import { getTalentProgress, addTalentPoints, syncTalentState, applyTalentStats, rollCrit } from './talents';
 import { updateAuxWeapons, resetAuxIds } from '../systems/auxWeapons';
 import { distance, angleBetween, findAutoAimTarget, findNearestEnemy, enemiesInArc, clampToMap, resolveObstacleCollision } from './collision';
 
@@ -68,7 +70,7 @@ export function createInitialGameState(): GameState {
   resetIds();
   resetAuxIds();
   nextProjectileId = 0;
-  return {
+  const state: GameState = {
     phase: GamePhase.WeaponSelect,
     character: createCharacter(WeaponTypeId.MachineGun),
     enemies: [], projectiles: [], xpDrops: [], chests: [],
@@ -83,11 +85,16 @@ export function createInitialGameState(): GameState {
     upgradeOptions: [], weaponDropOptions: [],
     availableWeaponTypes: [...INITIAL_WEAPON_POOL],
     selectedWeaponType: null, selectedIndex: 0,
+    talentPointsPerWeapon: {}, talentLevelsPerWeapon: {},
+    talentTreeView: null, inTalentTree: false,
   };
+  syncTalentState(state);
+  return state;
 }
 
 export function selectWeapon(state: GameState, weaponType: WeaponTypeId): void {
   state.character = createCharacter(weaponType);
+  applyTalentStats(state.character); // 天赋加成在角色创建后立即生效
   state.selectedWeaponType = weaponType;
   state.selectedIndex = 0;
   state.stageLevel = 1;
@@ -95,19 +102,32 @@ export function selectWeapon(state: GameState, weaponType: WeaponTypeId): void {
   state.stageKillCount = 0;
   state.lastStageResult = null;
   state.nextStageCountdown = STAGE_NEXT_COUNTDOWN;
+  state.inTalentTree = false;
+  state.talentTreeView = null;
+  syncTalentState(state);
   state.phase = GamePhase.Playing;
 }
 
-/** 退出到主菜单（重置整局，金币保留在 localStorage） */
-export function exitToMainMenu(): GameState {
-  return createInitialGameState();
+/** 退出到主菜单：结算当前关卡已得金币（击杀×关卡×100），结果带回主菜单展示 */
+export function exitToMainMenu(state: GameState): GameState {
+  const next = createInitialGameState();
+  const coinsEarned = Math.floor(state.stageKillCount * state.stageLevel * COINS_PER_KILL);
+  if (coinsEarned > 0) {
+    next.coins = addCoins(coinsEarned);
+    next.lastStageResult = { stage: state.stageLevel, kills: state.stageKillCount, coinsEarned };
+  }
+  return next;
 }
 
-/** 结算本关：金币 = 本关击杀数 × 关卡等级 × 100 */
+/** 结算本关：金币 = 本关击杀数 × 关卡等级 × 100，并奖励本角色 1 点天赋点 */
 function completeStage(state: GameState): void {
   const coinsEarned = Math.floor(state.stageKillCount * state.stageLevel * COINS_PER_KILL);
   state.lastStageResult = { stage: state.stageLevel, kills: state.stageKillCount, coinsEarned };
   state.coins = addCoins(coinsEarned);
+  if (state.selectedWeaponType) {
+    state.talentPointsPerWeapon[state.selectedWeaponType] = addTalentPoints(state.selectedWeaponType, TALENT_POINTS_PER_STAGE);
+  }
+  if (state.talentTreeView) state.talentTreeView.points = getTalentProgress(state.selectedWeaponType ?? WeaponTypeId.MeleeBlade).points;
   state.stageElapsedTime = STAGE_DURATION;
   state.nextStageCountdown = STAGE_NEXT_COUNTDOWN;
   state.phase = GamePhase.LevelComplete;
@@ -206,17 +226,31 @@ function updateMainWeapon(state: GameState, dt: number): void {
   if (config.isMelee) {
     if (!target) return;
     const dirAngle = angleBetween(char.position, target.position);
-    const targets = enemiesInArc(char.position, dirAngle, state.enemies, weapon.stats.range, config.attackArc ?? Math.PI / 2);
-    if (targets.length > 0) {
+    // 一次挥砍：命中/伤害/刀光。返回是否命中，供十字连斩复用
+    const swing = (dir: number): boolean => {
+      const targets = enemiesInArc(char.position, dir, state.enemies, weapon.stats.range, config.attackArc ?? Math.PI / 2);
+      if (targets.length === 0) return false;
       for (const hit of targets) {
-        hit.health -= weapon.stats.damage;
-        state.damageNumbers.push({ position: { x: hit.position.x, y: hit.position.y - hit.size }, value: weapon.stats.damage, timer: 0.8, maxTimer: 0.8 });
+        const { damage, crit } = rollCrit(char, weapon.stats.damage);
+        hit.health -= damage;
+        state.damageNumbers.push({
+          position: { x: hit.position.x, y: hit.position.y - hit.size },
+          value: Math.round(damage), timer: 0.8, maxTimer: 0.8, critical: crit,
+        });
         const dx = hit.position.x - char.position.x;
         const dy = hit.position.y - char.position.y;
         const len = Math.sqrt(dx * dx + dy * dy);
         if (len > 0) { hit.position.x += (dx / len) * 200; hit.position.y += (dy / len) * 200; }
       }
-      state.slashEffects.push({ position: { x: char.position.x, y: char.position.y }, direction: dirAngle, arc: config.attackArc ?? Math.PI / 2, range: weapon.stats.range, timer: 0.15 });
+      state.slashEffects.push({ position: { x: char.position.x, y: char.position.y }, direction: dir, arc: config.attackArc ?? Math.PI / 2, range: weapon.stats.range, timer: 0.15 });
+      return true;
+    };
+
+    if (swing(dirAngle)) {
+      // 十字连斩：主刀切出后，副刀垂直切入（全额伤害），同一冷却内完成交叉双挥
+      if (char.doubleStrikeChance > 0 && Math.random() < char.doubleStrikeChance) {
+        swing(dirAngle + Math.PI / 2);
+      }
       weapon.fireCooldown = 1 / weapon.stats.fireRate;
     }
   } else {
@@ -226,9 +260,13 @@ function updateMainWeapon(state: GameState, dt: number): void {
     for (let i = 0; i < weapon.stats.bulletCount; i++) {
       const spread = (Math.random() - 0.5) * 0.2;
       const finalAngle = aimAngle + spread;
-      const aimPos: Vector2 = { x: char.position.x + Math.cos(finalAngle) * 100, y: char.position.y + Math.sin(finalAngle) * 100 };
+      const aimDist = weapon.typeId === WeaponTypeId.Flamethrower ? weapon.stats.range : 100;
+      const aimPos: Vector2 = { x: char.position.x + Math.cos(finalAngle) * aimDist, y: char.position.y + Math.sin(finalAngle) * aimDist };
       const projSize = weapon.typeId === WeaponTypeId.Flamethrower ? weapon.stats.range : 3;
-      state.projectiles.push(createProjectile(char.position, aimPos, weapon.stats.damage, weapon.stats.penetration, weapon.typeId, 0, projSize));
+      const { damage, crit } = rollCrit(char, weapon.stats.damage);
+      const proj = createProjectile(char.position, aimPos, damage, weapon.stats.penetration, weapon.typeId, 0, projSize);
+      proj.crit = crit;
+      state.projectiles.push(proj);
     }
     weapon.currentAmmo--;
     weapon.fireCooldown = 1 / weapon.stats.fireRate;
@@ -239,7 +277,12 @@ const SWORD_HOMING_RANGE = 300;
 const SWORD_HOMING_TURN = 10;
 
 function homeProjectile(proj: Projectile, enemies: Enemy[], dt: number): void {
-  const seek = findNearestEnemy(proj.position, enemies, SWORD_HOMING_RANGE);
+  const isSword = proj.weaponType === ('sword_energy' as any);
+  const isMissile = proj.weaponType === ('missile' as any);
+  if (!isSword && !isMissile) return;
+  const range = isMissile ? 260 : SWORD_HOMING_RANGE;
+  const turn = isMissile ? 3.5 : SWORD_HOMING_TURN;
+  const seek = findNearestEnemy(proj.position, enemies, range);
   if (!seek) return;
   const speed = Math.hypot(proj.velocity.x, proj.velocity.y) || 420;
   const curDir = speed > 0 ? { x: proj.velocity.x / speed, y: proj.velocity.y / speed } : { x: 1, y: 0 };
@@ -247,9 +290,12 @@ function homeProjectile(proj: Projectile, enemies: Enemy[], dt: number): void {
   const dy = seek.position.y - proj.position.y;
   const len = Math.hypot(dx, dy) || 1;
   const desired = { x: dx / len, y: dy / len };
-  const turn = Math.min(1, SWORD_HOMING_TURN * dt);
-  const nx = curDir.x + (desired.x - curDir.x) * turn;
-  const ny = curDir.y + (desired.y - curDir.y) * turn;
+  // 越近转向越猛（避免在目标身边干转圈不命中）
+  const proximity = 1 - Math.min(1, len / 90);
+  const effTurn = isSword ? turn + proximity * 32 : turn;
+  const t = Math.min(1, effTurn * dt);
+  const nx = curDir.x + (desired.x - curDir.x) * t;
+  const ny = curDir.y + (desired.y - curDir.y) * t;
   const nlen = Math.hypot(nx, ny) || 1;
   proj.velocity.x = (nx / nlen) * speed;
   proj.velocity.y = (ny / nlen) * speed;
@@ -260,7 +306,7 @@ function updateProjectiles(state: GameState, dt: number): void {
   const enemies = state.enemies;
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const proj = projectiles[i];
-    if (proj.weaponType === ('sword_energy' as any)) {
+    if (proj.weaponType === ('sword_energy' as any) || proj.weaponType === ('missile' as any)) {
       homeProjectile(proj, enemies, dt);
     }
     proj.position.x += proj.velocity.x * dt;
@@ -275,11 +321,11 @@ function updateProjectiles(state: GameState, dt: number): void {
     for (const enemy of enemies) {
       if (proj.hitEnemies.has(enemy.id)) continue;
       const hitRadius = proj.weaponType === ('sword_energy' as any)
-        ? enemy.size + proj.projectileSize * 0.6
+        ? enemy.size + proj.projectileSize * 1.0 + 4
         : enemy.size;
       if (distance(proj.position, enemy.position) < hitRadius) {
         enemy.health -= proj.damage;
-        state.damageNumbers.push({ position: { x: enemy.position.x, y: enemy.position.y - enemy.size }, value: proj.damage, timer: 0.8, maxTimer: 0.8 });
+        state.damageNumbers.push({ position: { x: enemy.position.x, y: enemy.position.y - enemy.size }, value: Math.round(proj.damage), timer: 0.8, maxTimer: 0.8, critical: proj.crit });
         proj.hitEnemies.add(enemy.id);
 
         if (proj.weaponType === WeaponTypeId.Flamethrower) {

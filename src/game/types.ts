@@ -92,6 +92,8 @@ export interface Character {
   killCount: number;
   xpAbsorptionRadius: number;
   invincibleTimer: number;
+  critChance: number;
+  doubleStrikeChance: number;
 }
 
 export interface EnemyConfig {
@@ -133,6 +135,7 @@ export interface Projectile {
   weaponType: WeaponTypeId;
   explosionRadius: number;
   projectileSize: number;
+  crit?: boolean;
 }
 
 export interface Obstacle {
@@ -221,11 +224,76 @@ export enum GamePhase {
   GameOver = 'game_over',
 }
 
+/* ------------------------------------------------------------------ */
+/* 天赋树                                                              */
+/* ------------------------------------------------------------------ */
+
+export enum TalentNodeId {
+  MoveSpeed = 'move_speed',
+  AttackDamage = 'attack_damage',
+  AttackSpeed = 'attack_speed',
+  AttackRange = 'attack_range',
+  CritRate = 'crit_rate',
+  DoubleStrike = 'double_strike',
+}
+
+export interface TalentNodeDef {
+  id: TalentNodeId;
+  name: string;
+  /** 当前等级效果描述（显示当前值） */
+  desc: string;
+  tier: number; // 1 | 2 | 3
+  maxLevel: number; // 5
+  /** 每级累计效果数值（第 1 级 = values[0]），百分比用整数表示 */
+  values: number[];
+  /** 数值单位（如 '%'），空字符串表示无单位 */
+  unit: string;
+}
+
+export interface TalentTreeDef {
+  weaponType: WeaponTypeId;
+  nodes: TalentNodeDef[];
+}
+
+/** 单个天赋节点在界面上的快照（由 game 逻辑计算，渲染器只消费） */
+export interface TalentNodeView {
+  id: TalentNodeId;
+  name: string;
+  desc: string;
+  tier: number;
+  maxLevel: number;
+  level: number;
+  /** 当前效果文本，如 '+24%' */
+  curValue: string;
+  /** 下一级效果文本，如 '+32%'（满级为空） */
+  nextValue: string;
+  /** 是否已解锁（两阶天赋受前置等级约束） */
+  unlocked: boolean;
+  /** 能否立即升级（解锁 && 未满级 && 天赋点充足） */
+  canUpgrade: boolean;
+  /** 已满级 */
+  maxed: boolean;
+  /** 解锁所需前置说明 */
+  lockHint: string;
+  /** 升级花费天赋点 */
+  cost: number;
+}
+
+export interface TalentTreeView {
+  weaponType: WeaponTypeId;
+  nodes: TalentNodeView[];
+  points: number;
+  /** 每阶已投入等级数 */
+  tierLevels: number[];
+}
+
+
 export interface DamageNumber {
   position: Vector2;
   value: number;
   timer: number;
   maxTimer: number;
+  critical?: boolean;
 }
 
 export interface SlashEffect {
@@ -306,6 +374,14 @@ export interface GameState {
   availableWeaponTypes: WeaponTypeId[];
   selectedWeaponType: WeaponTypeId | null;
   selectedIndex: number;
+  /** 各主武器角色的天赋点（从持久化同步，供界面展示） */
+  talentPointsPerWeapon: Record<string, number>;
+  /** 各主武器角色的天赋等级（从持久化同步，供界面展示） */
+  talentLevelsPerWeapon: Record<string, Readonly<Record<string, number>>>;
+  /** 天赋树界面视图（weapon_select 中打开天赋面板时非空） */
+  talentTreeView: TalentTreeView | null;
+  /** 主菜单当前是否打开天赋树面板 */
+  inTalentTree: boolean;
 }
 
 export const MAP_WIDTH = 3000;
@@ -330,6 +406,23 @@ export const STAGE_NEXT_COUNTDOWN = 5;
 export const PAUSE_EXIT_BTN = { x: 10, y: 552, w: 280, h: 34 };
 /** 关卡完成界面「下一关」按钮 */
 export const NEXT_STAGE_BTN = { x: (SCREEN_WIDTH - 220) / 2, y: 380, w: 220, h: 50 };
+/** 主菜单「天赋树」入口按钮 */
+export const TALENT_BTN = { x: (SCREEN_WIDTH - 200) / 2, y: 396, w: 200, h: 44 };
+/** 天赋树面板「返回」按钮 */
+export const TALENT_BACK_BTN = { x: (SCREEN_WIDTH - 160) / 2, y: 552, w: 160, h: 36 };
+
+/* 天赋树常量 */
+export const TALENT_MAX_LEVEL = 5;
+/** 暴击伤害倍率 */
+export const CRIT_MULTIPLIER = 2;
+/** 2 阶解锁条件：1 阶合计投入等级 >= 该值 */
+export const TALENT_TIER2_REQ = 5;
+/** 3 阶解锁条件：2 阶合计投入等级 >= 该值 */
+export const TALENT_TIER3_REQ = 4;
+/** 每次升级消耗的天赋点 */
+export const TALENT_UPGRADE_COST = 1;
+/** 通关每关获得的天赋点 */
+export const TALENT_POINTS_PER_STAGE = 1;
 
 export interface WeaponCharacterPreset {
   speedMultiplier: number;
@@ -363,7 +456,7 @@ export const WEAPON_CONFIGS: Record<WeaponTypeId, WeaponConfig> = {
   },
   [WeaponTypeId.Flamethrower]: {
     id: WeaponTypeId.Flamethrower, name: '火焰喷射器',
-    baseStats: { damage: 3, fireRate: 12, magazineCapacity: 200, reloadSpeed: 3.9, penetration: 1, bulletCount: 1, range: 75 },
+    baseStats: { damage: 5, fireRate: 8, magazineCapacity: 200, reloadSpeed: 2.8, penetration: 1, bulletCount: 1, range: 140 },
     isMelee: false,
   },
   [WeaponTypeId.LaserGun]: {
@@ -381,12 +474,12 @@ export const WEAPON_CONFIGS: Record<WeaponTypeId, WeaponConfig> = {
 export const AUXILIARY_WEAPON_CONFIGS: Record<AuxiliaryWeaponType, AuxiliaryWeaponConfig> = {
   [AuxiliaryWeaponType.Missile]: {
     id: AuxiliaryWeaponType.Missile, name: '导弹',
-    baseStats: { damage: 30, range: 150, cooldown: 0, count: 1, explosionRadius: 40, rotationSpeed: 0, duration: 0, placementCooldown: 3, turretFireRate: 0, armTime: 0 },
+    baseStats: { damage: 30, range: 350, cooldown: 0, count: 1, explosionRadius: 55, rotationSpeed: 0, duration: 0, placementCooldown: 2, turretFireRate: 0, armTime: 0 },
     maxCount: 1,
   },
   [AuxiliaryWeaponType.WindWheel]: {
     id: AuxiliaryWeaponType.WindWheel, name: '旋转风轮',
-    baseStats: { damage: 25, range: 40, cooldown: 0, count: 3, explosionRadius: 0, rotationSpeed: 4.4, duration: 0, placementCooldown: 0, turretFireRate: 0, armTime: 0 },
+    baseStats: { damage: 40, range: 40, cooldown: 0, count: 3, explosionRadius: 0, rotationSpeed: 4.4, duration: 0, placementCooldown: 0, turretFireRate: 0, armTime: 0 },
     maxCount: 6,
   },
   [AuxiliaryWeaponType.LaserGun]: {
@@ -396,12 +489,12 @@ export const AUXILIARY_WEAPON_CONFIGS: Record<AuxiliaryWeaponType, AuxiliaryWeap
   },
   [AuxiliaryWeaponType.SwordEnergy]: {
     id: AuxiliaryWeaponType.SwordEnergy, name: '剑气',
-    baseStats: { damage: 20, range: 100, cooldown: 0, count: 1, explosionRadius: 0, rotationSpeed: 0, duration: 2.5, placementCooldown: 1.5, turretFireRate: 0, armTime: 0 },
-    maxCount: 6,
+    baseStats: { damage: 20, range: 300, cooldown: 0, count: 1, explosionRadius: 0, rotationSpeed: 0, duration: 2.5, placementCooldown: 1, turretFireRate: 0, armTime: 0 },
+    maxCount: 3,
   },
   [AuxiliaryWeaponType.Turret]: {
     id: AuxiliaryWeaponType.Turret, name: '炮台',
-    baseStats: { damage: 16, range: 100, cooldown: 0, count: 1, explosionRadius: 30, rotationSpeed: 0, duration: 10, placementCooldown: 0, turretFireRate: 2, armTime: 0 },
+    baseStats: { damage: 24, range: 220, cooldown: 0, count: 2, explosionRadius: 45, rotationSpeed: 0, duration: 20, placementCooldown: 0.6, turretFireRate: 3, armTime: 0 },
     maxCount: 3,
   },
   [AuxiliaryWeaponType.LandMine]: {

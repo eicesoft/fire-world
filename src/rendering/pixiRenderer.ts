@@ -37,8 +37,13 @@ import {
   COINS_PER_KILL,
   PAUSE_EXIT_BTN,
   NEXT_STAGE_BTN,
+  TALENT_BTN,
+  TALENT_BACK_BTN,
+  TalentNodeView,
+  RARITY_NAMES,
 } from '../game/types';
 import { ParticleSystem, createGlowTexture } from './particles';
+import { TALENT_TIER_ROWS, TALENT_TIER_COLORS, talentNodeRect } from '../ui/talentLayout';
 
 /* ------------------------------------------------------------------ */
 /* helpers                                                             */
@@ -53,7 +58,98 @@ const rgb = (r: number, g: number, b: number): number => {
 };
 const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
 
-    const MONO = 'monospace';
+/** 选择框：脉动描边 + 四角括号 + 顶部指示箭头（菜单卡片选中态） */
+function drawSelectionFrame(
+  c: Container,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  color: number,
+  t: number,
+): void {
+  const pulse = 0.65 + Math.sin(t * 6 + x * 0.01 + y * 0.013) * 0.3;
+  // 双层脉动描边（外圈柔光 + 内圈亮边）
+  const g = new Graphics();
+  g.rect(x - 7, y - 7, w + 14, h + 14).stroke({ color, width: 1, alpha: pulse * 0.35 });
+  g.rect(x - 3, y - 3, w + 6, h + 6).stroke({ color, width: 2, alpha: pulse });
+  c.addChild(g);
+  // 四角括号
+  const L = 13;
+  const corners: [number, number, number, number][] = [
+    [x - 1, y - 1, 1, 1],
+    [x + w + 1, y - 1, -1, 1],
+    [x - 1, y + h + 1, 1, -1],
+    [x + w + 1, y + h + 1, -1, -1],
+  ];
+  for (const [cx, cy, sx, sy] of corners) {
+    const cg = new Graphics();
+    cg.moveTo(cx + L * sx, cy).lineTo(cx, cy).lineTo(cx, cy + L * sy).stroke({ color: 0xffffff, width: 2.5, alpha: 0.95 });
+    c.addChild(cg);
+  }
+  // 顶部指示箭头
+  const aw = 7;
+  const arrow = new Graphics();
+  arrow.moveTo(x + w / 2, y - 10).lineTo(x + w / 2 - aw, y - 4).lineTo(x + w / 2 + aw, y - 4).closePath().fill({ color });
+  c.addChild(arrow);
+}
+
+/** 赛博朋克升级卡片：霓虹面板 + 稀有度徽章 + 扫描线 + 角落装饰，选中时加辉光 */
+function drawCyberCard(
+  c: Container,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rarityColor: number,
+  rarityName: string,
+  title: string,
+  stat: string,
+  selected: boolean,
+  t: number,
+): void {
+  // 面板底
+  const panel = new Graphics();
+  panel.roundRect(x, y, w, h, 8).fill({ color: selected ? 0x101c2e : 0x0c101d, alpha: 0.96 });
+  panel.roundRect(x, y, w, h, 8).stroke({ color: rarityColor, width: selected ? 2 : 1, alpha: selected ? 0.9 : 0.4 });
+  c.addChild(panel);
+  // 顶部霓虹条
+  const bar = new Graphics();
+  bar.roundRect(x + 3, y + 3, w - 6, 4, 2).fill({ color: rarityColor, alpha: 0.9 });
+  c.addChild(bar);
+  // 扫描线
+  const scan = new Graphics();
+  scan.rect(x + 10, y + h / 2 + 16, w - 20, 1).fill({ color: rarityColor, alpha: 0.16 });
+  c.addChild(scan);
+  // 稀有度徽章（小药丸）
+  const badgeBg = new Graphics();
+  badgeBg.roundRect(x + 8, y + 12, 40, 12, 6).fill({ color: rarityColor, alpha: 0.22 });
+  badgeBg.roundRect(x + 8, y + 12, 40, 12, 6).stroke({ color: rarityColor, width: 1, alpha: 0.8 });
+  c.addChild(badgeBg);
+  const badge = makeText(rarityName, { fontFamily: MONO, fontSize: 9, fontWeight: 'bold', fill: rarityColor }, 0.5, 0.5);
+  badge.position.set(x + 28, y + 18);
+  c.addChild(badge);
+  // 名称
+  const nameTxt = makeText(title, { fontFamily: MONO, fontSize: 14, fontWeight: 'bold', fill: selected ? 0xffffff : rarityColor }, 0, 0.5);
+  nameTxt.position.set(x + 10, y + 38);
+  c.addChild(nameTxt);
+  // 数值
+  const statTxt = makeText(stat, { fontFamily: MONO, fontSize: 12, fontWeight: 'bold', fill: 0x9fe8ff }, 0.5, 0.5);
+  statTxt.position.set(x + w / 2, y + h - 24);
+  c.addChild(statTxt);
+  // 右下角装饰三角
+  const tri = new Graphics();
+  tri.moveTo(x + w - 1, y + h - 1).lineTo(x + w - 20, y + h - 1).lineTo(x + w - 1, y + h - 20).closePath().fill({ color: rarityColor, alpha: 0.35 });
+  c.addChild(tri);
+  if (selected) {
+    drawSelectionFrame(c, x, y, w, h, rarityColor, t);
+    const glow = new Graphics();
+    glow.roundRect(x - 6, y - 6, w + 12, h + 12, 12).stroke({ color: rarityColor, width: 2, alpha: 0.22 + Math.sin(t * 5) * 0.1 });
+    c.addChild(glow);
+  }
+}
+
+const MONO = '"Cubic11", monospace';
 const FONT_10 = { fontFamily: MONO, fontSize: 10, fill: 0xffffff };
 const FONT_11 = { fontFamily: MONO, fontSize: 11, fill: 0xffffff };
 const FONT_12 = { fontFamily: MONO, fontSize: 12, fill: 0xffffff };
@@ -77,6 +173,7 @@ interface ChestGfx {
 
 interface TurretGfx {
   gfx: Graphics;
+  rangeRing: Graphics;
   label: Text;
 }
 
@@ -120,10 +217,10 @@ const PROJECTILE_COLORS: Record<string, number> = {
 const PROJECTILE_RADIUS: Record<string, number> = {
   [WeaponTypeId.MachineGun]: 3,
   [WeaponTypeId.Shotgun]: 4,
-  [WeaponTypeId.Flamethrower]: 5,
+  [WeaponTypeId.Flamethrower]: 9,
   [WeaponTypeId.LaserGun]: 3,
   [WeaponTypeId.Bow]: 4.5,
-  missile: 5,
+  missile: 6,
   aux_laser_gun: 3,
   sword_energy: 6,
   turret: 3,
@@ -138,25 +235,50 @@ const ENEMY_BURST_COLORS: Record<string, number> = {
 };
 
 function drawSwordBlade(g: Graphics, color: number): void {
-  g.moveTo(16, 0)
-    .lineTo(0, -4.5)
-    .lineTo(-6, -3)
-    .lineTo(-8, 0)
-    .lineTo(-6, 3)
-    .lineTo(0, 4.5)
+  // 剑气流光宽刃（半透明外沿）
+  g.moveTo(28, 0)
+    .lineTo(-4, -6.5)
+    .lineTo(-11, -4.5)
+    .lineTo(-14, 0)
+    .lineTo(-11, 4.5)
+    .lineTo(-4, 6.5)
     .closePath()
-    .fill({ color })
-    .stroke({ color: 0xffffff, width: 1.2, alpha: 0.9 });
-  g.moveTo(16, 0).lineTo(-7, 0).stroke({ color: 0xffffff, width: 1.6, alpha: 0.95 });
-  g.moveTo(-4, -6.5).lineTo(-4, 6.5).stroke({ color: 0x80deea, width: 2.2 });
-  g.moveTo(-4, 0).lineTo(-11, 0).stroke({ color: 0x84ffff, width: 2.4 });
-  g.circle(-11.5, 0, 1.8).fill({ color: 0xffffff });
+    .fill({ color, alpha: 0.28 });
+  // 白亮核心刃体
+  g.moveTo(26, 0)
+    .lineTo(-2, -3.4)
+    .lineTo(-10, -2.4)
+    .lineTo(-13, 0)
+    .lineTo(-10, 2.4)
+    .lineTo(-2, 3.4)
+    .closePath()
+    .fill({ color: 0xd9ffff })
+    .stroke({ color: 0xffffff, width: 1, alpha: 0.9 });
+  // 中心高光线
+  g.moveTo(23, 0).lineTo(-11, 0).stroke({ color: 0xffffff, width: 1.8, alpha: 0.95 });
+  // 剑尖高亮
+  g.circle(24, 0, 1.6).fill({ color: 0xffffff });
+  // 尾端剑气流
+  g.moveTo(-12, 0).lineTo(-18, -4).stroke({ color, width: 2.4, alpha: 0.7 });
+  g.moveTo(-12, 0).lineTo(-18, 4).stroke({ color, width: 2.4, alpha: 0.7 });
+  g.moveTo(-18, 0).lineTo(-26, 0).stroke({ color, width: 1.8, alpha: 0.45 });
+  g.circle(-27, 0, 1.4).fill({ color: 0xffffff, alpha: 0.8 });
 }
 
 function drawMine(g: Graphics, armed: boolean, explosionRadius: number): void {
   g.clear();
   g.circle(0, 0, explosionRadius).fill({ color: 0xff7043, alpha: 0.08 }).stroke({ color: 0xff5722, width: 1, alpha: 0.35 });
   g.circle(0, 0, 5).fill({ color: armed ? 0xf44336 : 0x666666 }).stroke({ color: 0xffeb3b, width: 1 });
+}
+
+function drawXpGem(g: Graphics, color: number): void {
+  g.clear();
+  // 菱形能量晶核 + 霓虹外框
+  g.moveTo(0, -7).lineTo(5, 0).lineTo(0, 7).lineTo(-5, 0).closePath()
+    .fill({ color, alpha: 0.85 })
+    .stroke({ color, width: 1.2, alpha: 0.9 });
+  g.moveTo(0, -3.5).lineTo(2.5, 0).lineTo(0, 3.5).lineTo(-2.5, 0).closePath()
+    .fill({ color: 0xffffff, alpha: 0.9 });
 }
 
 function roundRectPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
@@ -540,6 +662,7 @@ export class PixiRenderer {
     texture: createGlowTexture(),
     dynamicProperties: { position: true, rotation: true, color: true, vertex: false, uvs: false },
   });
+  private readonly xpGemC = new Container();
 
   // 实体对象池
   private readonly enemies = new Map<string, EnemyGfx>();
@@ -551,7 +674,9 @@ export class PixiRenderer {
   private readonly damages = new Map<string, Text>();
   private readonly projectiles = new Map<string, Particle>();
   private readonly blades = new Map<string, Graphics>();
+  private readonly swordGlows = new Map<string, Sprite>();
   private readonly xpDrops = new Map<string, Particle>();
+  private readonly xpGems = new Map<string, Graphics>();
   private readonly windwheels = new Map<number, WindWheelSlot>();
 
   private readonly charGroup = new Container();
@@ -640,6 +765,7 @@ export class PixiRenderer {
       this.obstacleC,
       this.damageC,
       this.xpC,
+      this.xpGemC,
       this.chestC,
       this.turretC,
       this.mineC,
@@ -793,8 +919,19 @@ export class PixiRenderer {
       let txt = this.damages.get(key);
       if (!txt) {
         txt = new Text({
-          text: `${dn.value}`,
-          style: { fontFamily: MONO, fontSize: 14, fontWeight: 'bold', fill: 0xff3232 },
+          text: `${Math.floor(dn.value)}`,
+          style: {
+            fontFamily: '"VT323", monospace',
+            fontSize: dn.critical ? 30 : 22,
+            fontWeight: 'normal',
+            fill: dn.critical ? 0xffd54f : 0xff5252,
+            stroke: dn.critical
+              ? { color: 0x7a4f00, width: 4 }
+              : { color: 0x3b0d0d, width: 3 },
+            dropShadow: dn.critical
+              ? { color: 0xffc107, blur: 8, distance: 0, alpha: 0.9 }
+              : undefined,
+          },
         });
         txt.anchor.set(0.5, 0.5);
         this.damages.set(key, txt);
@@ -824,8 +961,8 @@ export class PixiRenderer {
           y: drop.position.y,
           anchorX: 0.5,
           anchorY: 0.5,
-          tint: 0x76ff03,
-          alpha: 1,
+          tint: 0x29f3ff,
+          alpha: 0.9,
         });
         this.xpDrops.set(drop.id, p);
         this.xpC.addParticle(p);
@@ -833,14 +970,33 @@ export class PixiRenderer {
       p.x = drop.position.x;
       p.y = drop.position.y;
       // 呼吸感脉冲
-      const pulse = 3.6 + Math.sin(elapsed * 4 + drop.id.length * 1.7) * 0.7;
+      const pulse = 4 + Math.sin(elapsed * 4 + drop.id.length * 1.7) * 0.8;
       p.scaleX = pulse / 32;
       p.scaleY = pulse / 32;
+
+      // 旋转菱形晶核（赛博朋克能量晶体）
+      let gem = this.xpGems.get(drop.id);
+      if (!gem) {
+        gem = new Graphics();
+        drawXpGem(gem, 0x29f3ff);
+        this.xpGems.set(drop.id, gem);
+        this.xpGemC.addChild(gem);
+      }
+      gem.position.set(drop.position.x, drop.position.y);
+      gem.rotation = elapsed * 3 + drop.id.length;
+      gem.scale.set(1 + Math.sin(elapsed * 5 + drop.id.length * 1.3) * 0.12);
     }
     for (const [id, p] of this.xpDrops) {
       if (!seen.has(id)) {
         this.xpC.removeParticle(p);
         this.xpDrops.delete(id);
+      }
+    }
+    for (const [id, g] of this.xpGems) {
+      if (!seen.has(id)) {
+        this.xpGemC.removeChild(g);
+        g.destroy();
+        this.xpGems.delete(id);
       }
     }
   }
@@ -878,16 +1034,27 @@ export class PixiRenderer {
       seen.add(t.id);
       let tg = this.turrets.get(t.id);
       if (!tg) {
+        const rangeRing = new Graphics();
+        // 半透明攻击范围圈 + 旋转扫描线
+        rangeRing.circle(0, 0, t.range).fill({ color: 0xff9800, alpha: 0.06 });
+        rangeRing.circle(0, 0, t.range).stroke({ color: 0xff9800, width: 1, alpha: 0.3 });
+        rangeRing.circle(0, 0, t.range - 6).stroke({ color: 0xffc107, width: 1, alpha: 0.12 });
         const gfx = new Graphics();
         gfx.rect(-6, -6, 12, 12).fill({ color: 0xff9800 }).stroke({ color: 0xffc107, width: 2 });
         const label = makeText('炮', { fontFamily: MONO, fontSize: 8, fill: 0xffffff }, 0.5, 0.5);
         label.position.set(0, 3);
         gfx.addChild(label);
-        tg = { gfx, label };
+        rangeRing.addChild(gfx);
+        tg = { gfx: rangeRing, rangeRing, label };
         this.turrets.set(t.id, tg);
-        this.turretC.addChild(gfx);
+        this.turretC.addChild(rangeRing);
       }
       tg.gfx.position.set(t.position.x, t.position.y);
+      // 范围环扫描线：随时间旋转一圈
+      const rot = ((performance.now() / 1000) % 4 / 4) * Math.PI * 2;
+      const rx = Math.cos(rot) * t.range;
+      const ry = Math.sin(rot) * t.range;
+      tg.rangeRing.moveTo(0, 0).lineTo(rx, ry).stroke({ color: 0xffc107, width: 1, alpha: 0.35 });
     }
     for (const [id, tg] of this.turrets) {
       if (!seen.has(id)) {
@@ -957,12 +1124,29 @@ export class PixiRenderer {
 
   private redrawEnemyBar(g: Graphics, e: Enemy): void {
     g.clear();
-    const w = Math.max(16, e.size * 2);
+    const w = Math.max(22, e.size * 2.2);
+    const h = 5;
     const ratio = clamp01(e.health / e.maxHealth);
-    g.rect(-w / 2, 0, w, 3).fill({ color: 0x222222, alpha: 0.85 });
-    g.rect(-w / 2, 0, w * ratio, 3).fill({
-      color: ratio > 0.5 ? 0x4caf50 : ratio > 0.25 ? 0xff9800 : 0xf44336,
-    });
+    const color = ratio > 0.5 ? 0x33ff9c : ratio > 0.25 ? 0xffb300 : 0xff3d5a;
+    // 底槽 + 霓虹描边
+    g.rect(-w / 2 - 1, -1, w + 2, h + 2).fill({ color: 0x0a0f1e });
+    g.rect(-w / 2 - 1, -1, w + 2, h + 2).stroke({ color: 0x2b4a6b, width: 1, alpha: 0.8 });
+    // 8 节段 HUD 血条
+    const segs = 8;
+    const gap = 1;
+    const segW = (w - (segs - 1) * gap) / segs;
+    const filled = Math.ceil(ratio * segs);
+    for (let i = 0; i < segs; i++) {
+      g.rect(-w / 2 + i * (segW + gap), 0, segW, h).fill({
+        color: i < filled ? color : 0x15202f,
+        alpha: i < filled ? 1 : 0.9,
+      });
+    }
+    // 血量边缘白色高光（科技感端点）
+    if (ratio > 0) {
+      const endX = -w / 2 + w * ratio - 1;
+      g.rect(Math.max(-w / 2 - 1, endX), -1, 2, h + 2).fill({ color: 0xffffff, alpha: 0.9 });
+    }
   }
 
   private syncSlashes(effects: SlashEffect[]): void {
@@ -1107,8 +1291,22 @@ export class PixiRenderer {
     for (const proj of projectiles) {
       seen.add(proj.id);
       if (proj.weaponType === ('sword_energy' as any)) {
-        // 剑气：匕首造型实体
+        // 剑气：光晕 + 匕首实体（光晕在下方，叠加发光）
         const angle = Math.atan2(proj.velocity.y, proj.velocity.x);
+        let glow = this.swordGlows.get(proj.id);
+        if (!glow) {
+          glow = new Sprite(this.glowTexture);
+          glow.anchor.set(0.5, 0.5);
+          glow.tint = 0x66e0ff;
+          glow.alpha = 0.55;
+          glow.blendMode = 'add';
+          this.bladeC.addChild(glow);
+          this.swordGlows.set(proj.id, glow);
+        }
+        glow.position.set(proj.position.x, proj.position.y);
+        const glowPulse = 0.85 + Math.sin(elapsed * 18 + proj.id.length * 3) * 0.12;
+        glow.scale.set(glowPulse);
+
         let b = this.blades.get(proj.id);
         if (!b) {
           b = new Graphics();
@@ -1149,13 +1347,13 @@ export class PixiRenderer {
       const trail = Math.min(12, speed * 0.02);
 
       if (proj.weaponType === WeaponTypeId.Flamethrower) {
-        // 火焰：随机大小闪烁，随生命周期淡出
+        // 火焰：沿飞行方向拉长的火舌，随机大小闪烁，随生命周期淡出
         const lifeRatio = proj.maxLifetime > 0 ? proj.lifetime / proj.maxLifetime : 0;
         const flicker = 1 + Math.random() * 0.9;
         const a = Math.max(0, Math.min(1, Math.sin((1 - lifeRatio) * Math.PI)));
         p.alpha = a;
-        p.scaleX = (radius * flicker) / 32;
-        p.scaleY = (radius * flicker) / 32;
+        p.scaleX = (radius * 2.8 * flicker) / 32;
+        p.scaleY = (radius * 1.1 * flicker) / 32;
       } else {
         p.alpha = 1;
         // 彗星拖尾：沿速度方向拉长
@@ -1178,11 +1376,21 @@ export class PixiRenderer {
         this.bladeC.removeChild(b);
       }
       this.blades.clear();
+      for (const [id, g] of this.swordGlows) {
+        this.bladeC.removeChild(g);
+      }
+      this.swordGlows.clear();
     } else {
       for (const [id, b] of this.blades) {
         if (!seen.has(id)) {
           this.bladeC.removeChild(b);
           this.blades.delete(id);
+        }
+      }
+      for (const [id, g] of this.swordGlows) {
+        if (!seen.has(id)) {
+          this.bladeC.removeChild(g);
+          this.swordGlows.delete(id);
         }
       }
     }
@@ -1207,6 +1415,63 @@ export class PixiRenderer {
     const curEnemies = new Map(state.enemies.map((e) => [e.id, e]));
     const curProjectiles = new Set(state.projectiles.map((p) => p.id));
     const curLandMines = new Set(state.landMines.map((m) => m.id));
+
+    // 剑气发射：起手剑光
+    for (const p of state.projectiles) {
+      if (p.weaponType !== ('sword_energy' as any)) continue;
+      if (this.prevProjectiles.has(p.id)) continue;
+      const dirAngle = Math.atan2(p.velocity.y, p.velocity.x);
+      this.fx.burst({
+        x: p.position.x, y: p.position.y, count: 14,
+        color: 0x80e8ff, angle: dirAngle, spread: 0.9,
+        speedMin: 40, speedMax: 170, sizeMin: 2, sizeMax: 4,
+        lifeMin: 0.12, lifeMax: 0.3, drag: 0.88, additive: true,
+      });
+      this.fx.spawn(
+        p.position.x + Math.cos(dirAngle) * 6,
+        p.position.y + Math.sin(dirAngle) * 6,
+        { color: 0xffffff, speedMin: 180, speedMax: 260, sizeMin: 2.5, sizeMax: 4,
+          lifeMin: 0.12, lifeMax: 0.2, drag: 0.85, additive: true, alpha: 0.95 },
+      );
+    }
+
+    // 剑气消散：弹道寿命结束时光点散开
+    for (const [id, p] of this.prevProjectiles) {
+      if (p.weaponType !== ('sword_energy' as any)) continue;
+      if (curProjectiles.has(id)) continue;
+      this.fx.burst({
+        x: p.position.x, y: p.position.y, count: 7, color: 0x9fffff,
+        speedMin: 5, speedMax: 45, sizeMin: 1.2, sizeMax: 2.6,
+        lifeMin: 0.1, lifeMax: 0.3, drag: 0.94, additive: true,
+      });
+    }
+
+    // 导弹命中/引爆 → 橙红爆炸 + 冲击波 + 震屏
+    for (const [id, p] of this.prevProjectiles) {
+      if (p.weaponType !== ('missile' as any)) continue;
+      if (curProjectiles.has(id)) continue;
+      this.fx.burst({
+        x: p.position.x, y: p.position.y, count: 26, color: 0xff7043,
+        speedMin: 70, speedMax: 330, sizeMin: 3, sizeMax: 6.5,
+        lifeMin: 0.2, lifeMax: 0.5, drag: 0.9, gravity: 30, spin: 5, additive: true,
+      });
+      this.fx.burst({
+        x: p.position.x, y: p.position.y, count: 12, color: 0xffe0b2,
+        speedMin: 120, speedMax: 360, sizeMin: 2, sizeMax: 4.5,
+        lifeMin: 0.12, lifeMax: 0.3, drag: 0.88, additive: true,
+      });
+      // 冲击波环（外圈快速扩散的稀疏粒子）
+      for (let k = 0; k < 14; k++) {
+        const a = (k / 14) * Math.PI * 2;
+        this.fx.spawn(p.position.x, p.position.y, {
+          color: 0xffb74d, angle: a, spread: 0.12, additive: true,
+          speedMin: 220, speedMax: 300, sizeMin: 1.5, sizeMax: 2.6,
+          lifeMin: 0.18, lifeMax: 0.3, drag: 0.92, alpha: 0.9,
+        });
+      }
+      this.addFlash(0xff6d00, 0.16, 0.28);
+      this.addShake(4, 0.25);
+    }
 
     // 敌人死亡 → 爆裂
     for (const [id, pe] of this.prevEnemies) {
@@ -1240,6 +1505,26 @@ export class PixiRenderer {
     for (const [id, pe] of this.prevEnemies) {
       const cur = curEnemies.get(id);
       if (cur && cur.health < pe.health - 0.5) {
+        // 剑气命中：额外青色剑气轨迹溅射
+        const swordNear = state.projectiles.some((p) => {
+          if (p.weaponType !== ('sword_energy' as any)) return false;
+          const dx = p.position.x - cur.position.x;
+          const dy = p.position.y - cur.position.y;
+          return Math.sqrt(dx * dx + dy * dy) < cur.size + 16;
+        });
+        if (swordNear) {
+          this.fx.spawn(
+            cur.position.x, cur.position.y,
+            { color: 0x9fffff, angle: Math.random() * Math.PI * 2, spread: 0.7,
+              speedMin: 90, speedMax: 240, sizeMin: 2, sizeMax: 4,
+              lifeMin: 0.1, lifeMax: 0.22, drag: 0.9, additive: true, alpha: 0.95 },
+          );
+          this.fx.burst({
+            x: cur.position.x, y: cur.position.y, count: 6, color: 0x66e0ff,
+            speedMin: 60, speedMax: 220, sizeMin: 1.5, sizeMax: 3,
+            lifeMin: 0.12, lifeMax: 0.3, drag: 0.92, additive: true,
+          });
+        }
         this.fx.burst({
           x: cur.position.x, y: cur.position.y,
           count: isMelee ? 9 : 4,
@@ -1322,23 +1607,55 @@ export class PixiRenderer {
       }
     }
 
-    // 剑气：匕首流光拖尾
+    // 剑气：流光拖尾（尾随光尘 + 刀刃两侧气流 + 剑尖星点）
     for (const proj of state.projectiles) {
       if (proj.weaponType !== ('sword_energy' as any)) continue;
-      const back = Math.atan2(proj.velocity.y, proj.velocity.x) + Math.PI + (Math.random() - 0.5) * 0.8;
-      const dist = 6 + Math.random() * 10;
+      const fwd = Math.atan2(proj.velocity.y, proj.velocity.x);
+      const perp = fwd + Math.PI / 2;
+      // 1) 尾随光尘（沿速度反方向螺旋散开）
+      for (let k = 0; k < 2; k++) {
+        const back = fwd + Math.PI + (Math.random() - 0.5) * 1.1;
+        const dist = 10 + Math.random() * 14;
+        this.fx.spawn(
+          proj.position.x + Math.cos(back) * dist,
+          proj.position.y + Math.sin(back) * dist,
+          {
+            color: Math.random() < 0.5 ? 0x9fffff : 0x4dd0ff,
+            additive: true, angle: back, spread: 0.7,
+            speedMin: 8, speedMax: 55,
+            sizeMin: 1.5, sizeMax: 3.2,
+            lifeMin: 0.15, lifeMax: 0.35,
+            drag: 0.93, alpha: 0.85,
+          },
+        );
+      }
+      // 2) 刀刃两侧气流（垂直方向轻扫）
+      const side = (Math.random() < 0.5 ? -1 : 1) * (0.4 + Math.random() * 0.5);
+      const sideAngle = perp + side * 0.5;
       this.fx.spawn(
-        proj.position.x + Math.cos(back) * dist,
-        proj.position.y + Math.sin(back) * dist,
+        proj.position.x + Math.cos(sideAngle) * 6,
+        proj.position.y + Math.sin(sideAngle) * 6,
         {
-          color: Math.random() < 0.5 ? 0x9fffff : 0x4dd0ff,
-          additive: true, angle: back, spread: 0.6,
-          speedMin: 10, speedMax: 60,
-          sizeMin: 1.5, sizeMax: 3,
-          lifeMin: 0.15, lifeMax: 0.35,
-          drag: 0.93, alpha: 0.8,
+          color: 0xffffff,
+          additive: true, angle: sideAngle, spread: 0.4,
+          speedMin: 15, speedMax: 60,
+          sizeMin: 1.2, sizeMax: 2.4,
+          lifeMin: 0.08, lifeMax: 0.2,
+          drag: 0.92, alpha: 0.7,
         },
       );
+      // 3) 剑尖星点（极低概率闪亮）
+      if (Math.random() < 0.15) {
+        this.fx.spawn(
+          proj.position.x + Math.cos(fwd) * 20,
+          proj.position.y + Math.sin(fwd) * 20,
+          {
+            color: 0xe6ffff, additive: true, angle: fwd, spread: 0.25,
+            speedMin: 20, speedMax: 80, sizeMin: 2, sizeMax: 3.5,
+            lifeMin: 0.06, lifeMax: 0.16, drag: 0.9, alpha: 1,
+          },
+        );
+      }
     }
 
     // 导弹：尾焰拖尾（橙红火苗 + 白热核心）
@@ -1439,17 +1756,36 @@ export class PixiRenderer {
       }
     }
 
-    // XP 拾取 → 光点
+    // XP 拾取 → 赛博朋克能量吸收：青色电弧 + 上升光柱 + 光点
     const curXp = new Set(state.xpDrops.map((d) => d.id));
     for (const id of this.prevXp) {
       if (curXp.has(id)) continue;
       const drop = this.prevXpData.get(id);
       if (drop) {
         this.fx.burst({
-          x: drop.position.x, y: drop.position.y, count: 6, color: 0x76ff03,
-          speedMin: 40, speedMax: 140, sizeMin: 1.5, sizeMax: 3,
-          lifeMin: 0.2, lifeMax: 0.45, drag: 0.9, additive: true,
+          x: drop.position.x, y: drop.position.y, count: 10, color: 0x29f3ff,
+          speedMin: 60, speedMax: 220, sizeMin: 1.5, sizeMax: 3.5,
+          lifeMin: 0.2, lifeMax: 0.5, drag: 0.9, additive: true,
         });
+        this.fx.burst({
+          x: drop.position.x, y: drop.position.y, count: 5, color: 0xffffff,
+          speedMin: 90, speedMax: 260, sizeMin: 1.2, sizeMax: 2.2,
+          lifeMin: 0.1, lifeMax: 0.25, drag: 0.88, additive: true,
+        });
+        // 上升数据流光柱
+        for (let k = 0; k < 8; k++) {
+          this.fx.spawn(
+            drop.position.x + (Math.random() - 0.5) * 10,
+            drop.position.y,
+            {
+              color: Math.random() < 0.5 ? 0x29f3ff : 0x9ffcff,
+              angle: -Math.PI / 2, spread: 0.35, additive: true,
+              speedMin: 80, speedMax: 220, sizeMin: 1.5, sizeMax: 3,
+              lifeMin: 0.25, lifeMax: 0.6, drag: 0.95, alpha: 0.9,
+            },
+          );
+        }
+        this.addFlash(0x21d4fd, 0.08, 0.2);
       }
     }
 
@@ -1679,7 +2015,7 @@ export class PixiRenderer {
     let key = '';
     switch (phase) {
       case GamePhase.WeaponSelect:
-        key = `ws:${state.selectedIndex}`;
+        key = `ws:${state.selectedIndex}:${state.lastStageResult ? `${state.lastStageResult.stage}:${state.lastStageResult.kills}:${state.lastStageResult.coinsEarned}` : ''}:${state.inTalentTree ? '1' : '0'}:${state.talentTreeView ? `${state.talentTreeView.points}|${state.talentTreeView.nodes.map((n) => `${n.id}:${n.level}:${n.canUpgrade ? 1 : 0}:${n.unlocked ? 1 : 0}`).join(',')}` : ''}`;
         break;
       case GamePhase.LevelUp:
         key = `lu:${state.selectedIndex}:${state.upgradeOptions.map((o) => o.description).join('|')}`;
@@ -1706,7 +2042,11 @@ export class PixiRenderer {
 
     switch (phase) {
       case GamePhase.WeaponSelect:
-        this.drawWeaponSelect(this.menuC, state);
+        if (state.inTalentTree) {
+          this.drawTalentTree(this.menuC, state);
+        } else {
+          this.drawWeaponSelect(this.menuC, state);
+        }
         break;
       case GamePhase.LevelUp:
         this.drawLevelUp(this.menuC, state);
@@ -1736,6 +2076,18 @@ export class PixiRenderer {
     coinText.position.set(SCREEN_WIDTH / 2, 118);
     c.addChild(coinText);
 
+    // 中途退出时的金币结算结果
+    if (state.lastStageResult) {
+      const r = state.lastStageResult;
+      const banner = makeText(
+        `退出结算  第 ${r.stage} 关  击杀 ${r.kills}  →  +${r.coinsEarned} 金币`,
+        { fontFamily: MONO, fontSize: 14, fontWeight: 'bold', fill: 0xffc107 },
+        0.5, 0.5,
+      );
+      banner.position.set(SCREEN_WIDTH / 2, 142);
+      c.addChild(banner);
+    }
+
     const weapons = INITIAL_WEAPON_POOL;
     const boxWidth = 150;
     const boxHeight = 150;
@@ -1750,11 +2102,12 @@ export class PixiRenderer {
       const selected = i === state.selectedIndex;
 
       const gfx = new Graphics();
-      if (selected) {
-        gfx.rect(x - 2, startY - 2, boxWidth + 4, boxHeight + 4).stroke({ color: 0xffffff, width: 3 });
-      }
-      gfx.rect(x, startY, boxWidth, boxHeight).stroke({ color: 0x4fc3f7, width: 2 });
+      gfx.rect(x, startY, boxWidth, boxHeight).fill({ color: selected ? 0x16233a : 0x0d1526 });
+      gfx.rect(x, startY, boxWidth, boxHeight).stroke({ color: selected ? 0x4fc3f7 : 0x33506e, width: 1.5 });
       c.addChild(gfx);
+      if (selected) {
+        drawSelectionFrame(c, x, startY, boxWidth, boxHeight, 0x4fc3f7, performance.now() / 1000);
+      }
 
       const name = makeText(config.name, { fontFamily: MONO, fontSize: 16, fill: selected ? 0xffffff : 0x4fc3f7 }, 0.5, 0.5);
       name.position.set(x + boxWidth / 2, startY + 30);
@@ -1774,9 +2127,156 @@ export class PixiRenderer {
       });
     }
 
-    const hint = makeText('← → 选择  回车/A 确认', { fontFamily: MONO, fontSize: 12, fill: 0x888888 }, 0.5, 0.5);
+    const hint = makeText('← → 选择武器  回车/A 确认  T/点击 [天赋树] 升级天赋', { fontFamily: MONO, fontSize: 12, fill: 0x888888 }, 0.5, 0.5);
     hint.position.set(SCREEN_WIDTH / 2, startY + boxHeight + 40);
     c.addChild(hint);
+
+    const btn = TALENT_BTN;
+    const btnGfx = new Graphics();
+    btnGfx.rect(btn.x, btn.y, btn.w, btn.h).fill({ color: 0x16202e });
+    btnGfx.rect(btn.x, btn.y, btn.w, btn.h).stroke({ color: 0xffc107, width: 1.5 });
+    c.addChild(btnGfx);
+    const selWeapon = weapons[state.selectedIndex];
+    const selPoints = selWeapon !== undefined ? (state.talentPointsPerWeapon[selWeapon] ?? 0) : 0;
+    const btnTxt = makeText(`天赋树  可用 ${selPoints} 点`, { fontFamily: MONO, fontSize: 13, fontWeight: 'bold', fill: 0xffc107 }, 0.5, 0.5);
+    btnTxt.position.set(btn.x + btn.w / 2, btn.y + btn.h / 2);
+    c.addChild(btnTxt);
+  }
+
+  private drawTalentTree(c: Container, state: GameState): void {
+    const g = new Graphics();
+    g.rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT).fill({ color: 0x0b0b14 });
+    c.addChild(g);
+
+    const view = state.talentTreeView;
+    const weaponType = view?.weaponType ?? INITIAL_WEAPON_POOL[state.selectedIndex];
+    const weaponName = weaponType !== undefined ? WEAPON_CONFIGS[weaponType].name : '';
+
+    const title = makeText(`${weaponName} · 天赋树`, { fontFamily: MONO, fontSize: 22, fontWeight: 'bold', fill: 0xffc107 }, 0.5, 0.5);
+    title.position.set(SCREEN_WIDTH / 2, 40);
+    c.addChild(title);
+
+    if (!view) {
+      const none = makeText('该角色暂无天赋树（后续版本开放）', { fontFamily: MONO, fontSize: 14, fill: 0x888888 }, 0.5, 0.5);
+      none.position.set(SCREEN_WIDTH / 2, 300);
+      c.addChild(none);
+      const backHint = makeText('点击下方按钮或按 ESC 返回', { fontFamily: MONO, fontSize: 12, fill: 0x666666 }, 0.5, 0.5);
+      backHint.position.set(SCREEN_WIDTH / 2, 330);
+      c.addChild(backHint);
+      this.drawTalentBack(c);
+      return;
+    }
+
+    const pointsTxt = makeText(`天赋点：${view.points}`, { fontFamily: MONO, fontSize: 14, fontWeight: 'bold', fill: 0x76ff03 }, 0.5, 0.5);
+    pointsTxt.position.set(SCREEN_WIDTH / 2, 74);
+    c.addChild(pointsTxt);
+
+    // 分阶标题 + 解锁条件
+    TALENT_TIER_ROWS.forEach((row, rIdx) => {
+      const color = TALENT_TIER_COLORS[row.tier];
+      const label = makeText(`${row.tier} 阶${row.tier === 3 ? ' · 终极' : ''}`, { fontFamily: MONO, fontSize: 12, fontWeight: 'bold', fill: color }, 0, 0.5);
+      label.position.set(20, row.labelY - 16);
+      c.addChild(label);
+      if (row.tier > 1) {
+        const need = row.tier === 2 ? 5 : 4;
+        const cur = view.tierLevels[rIdx - 1] ?? 0;
+        const ok = cur >= need;
+        const unlock = makeText(
+          `解锁：${row.tier - 1} 阶累计 ${cur}/${need} 级`,
+          { fontFamily: MONO, fontSize: 11, fill: ok ? color : 0x666666 },
+          1, 0.5,
+        );
+        unlock.position.set(SCREEN_WIDTH - 20, row.labelY - 16);
+        c.addChild(unlock);
+      }
+    });
+
+    for (let i = 0; i < view.nodes.length; i++) {
+      const node = view.nodes[i];
+      const rect = talentNodeRect(view.nodes, i);
+      if (!rect) continue;
+      const tierColor = TALENT_TIER_COLORS[node.tier];
+      const selected = i === state.selectedIndex;
+      const active = node.unlocked;
+
+      const gfx = new Graphics();
+      gfx.rect(rect.x, rect.y, rect.w, rect.h).fill({ color: selected ? 0x1c2438 : 0x14141f });
+      gfx.rect(rect.x, rect.y, rect.w, rect.h).stroke({ color: active ? tierColor : 0x3a3a4a, width: 1.5 });
+      c.addChild(gfx);
+      if (selected) {
+        drawSelectionFrame(c, rect.x, rect.y, rect.w, rect.h, tierColor, performance.now() / 1000);
+      }
+
+      // 等级进度条（5 段）
+      const segW = 12;
+      const segGap = 4;
+      const segsW = node.maxLevel * segW + (node.maxLevel - 1) * segGap;
+      const segX0 = rect.x + (rect.w - segsW) / 2;
+      const segY = rect.y + rect.h - 16;
+      for (let p = 0; p < node.maxLevel; p++) {
+        const filled = p < node.level;
+        const seg = new Graphics();
+        seg.roundRect(segX0 + p * (segW + segGap), segY, segW, 6, 2).fill({
+          color: filled ? tierColor : 0x2c2c3c,
+          alpha: active ? 1 : 0.4,
+        });
+        c.addChild(seg);
+      }
+
+      if (!active) {
+        const mask = new Graphics();
+        mask.rect(rect.x, rect.y, rect.w, rect.h - 10).fill({ color: 0x000000, alpha: 0.45 });
+        c.addChild(mask);
+      }
+
+      const name = makeText(node.name, { fontFamily: MONO, fontSize: 14, fontWeight: 'bold', fill: active ? tierColor : 0x666666 }, 0, 0.5);
+      name.position.set(rect.x + 10, rect.y + 20);
+      c.addChild(name);
+
+      const desc = makeText(node.desc, { fontFamily: MONO, fontSize: 10, fill: 0x8899aa }, 0, 0.5);
+      desc.position.set(rect.x + 10, rect.y + 42);
+      c.addChild(desc);
+
+      if (node.maxed) {
+        const maxTxt = makeText('已达满级', { fontFamily: MONO, fontSize: 11, fontWeight: 'bold', fill: 0xffffff }, 0.5, 0.5);
+        maxTxt.position.set(rect.x + rect.w / 2, rect.y + 64);
+        c.addChild(maxTxt);
+      } else if (!active) {
+        const lockTxt = makeText(node.lockHint, { fontFamily: MONO, fontSize: 10, fill: 0x666666 }, 0.5, 0.5);
+        lockTxt.position.set(rect.x + rect.w / 2, rect.y + 64);
+        c.addChild(lockTxt);
+      } else {
+        const valueTxt = makeText(
+          `${node.curValue}${node.nextValue ? '  →  ' + node.nextValue : ''}`,
+          { fontFamily: MONO, fontSize: 11, fontWeight: 'bold', fill: 0xffffff },
+          0.5, 0.5,
+        );
+        valueTxt.position.set(rect.x + rect.w / 2, rect.y + 64);
+        c.addChild(valueTxt);
+        if (view.points < node.cost) {
+          const costTxt = makeText('天赋点不足', { fontFamily: MONO, fontSize: 9, fill: 0xff5252 }, 1, 0.5);
+          costTxt.position.set(rect.x + rect.w - 6, rect.y + 86);
+          c.addChild(costTxt);
+        }
+      }
+    }
+
+    const hint = makeText('← → 选择天赋  回车/A 或点击 升级   ESC 返回', { fontFamily: MONO, fontSize: 12, fill: 0x888888 }, 0.5, 0.5);
+    hint.position.set(SCREEN_WIDTH / 2, SCREEN_HEIGHT - 26);
+    c.addChild(hint);
+
+    this.drawTalentBack(c);
+  }
+
+  private drawTalentBack(c: Container): void {
+    const btn = TALENT_BACK_BTN;
+    const bg = new Graphics();
+    bg.rect(btn.x, btn.y, btn.w, btn.h).fill({ color: 0x1a1a2e });
+    bg.rect(btn.x, btn.y, btn.w, btn.h).stroke({ color: 0xffffff, alpha: 0.4, width: 1 });
+    c.addChild(bg);
+    const txt = makeText('返回武器选择', { fontFamily: MONO, fontSize: 13, fontWeight: 'bold', fill: 0xffffff }, 0.5, 0.5);
+    txt.position.set(btn.x + btn.w / 2, btn.y + btn.h / 2);
+    c.addChild(txt);
   }
 
   private drawLevelUp(c: Container, state: GameState): void {
@@ -1800,16 +2300,20 @@ export class PixiRenderer {
       const x = startX + i * (boxWidth + 20);
       const selected = i === state.selectedIndex;
 
-      const gfx = new Graphics();
-      if (selected) {
-        gfx.rect(x - 2, startY - 2, boxWidth + 4, boxHeight + 4).stroke({ color: 0xffffff, width: 3 });
-      }
-      gfx.rect(x, startY, boxWidth, boxHeight).stroke({ color, width: 2 });
-      c.addChild(gfx);
+      // 卡片标题：武器/副武器名
+      let title = '';
+      if (opt.target === 'acquire_aux' && opt.auxTypeId) title = AUXILIARY_WEAPON_CONFIGS[opt.auxTypeId].name;
+      else if (opt.weaponTypeId) title = WEAPON_CONFIGS[opt.weaponTypeId].name;
+      else if (opt.auxTypeId) title = AUXILIARY_WEAPON_CONFIGS[opt.auxTypeId].name;
 
-      const desc = makeText(opt.description, { fontFamily: MONO, fontSize: 12, fill: color }, 0.5, 0.5);
-      desc.position.set(x + boxWidth / 2, startY + 50);
-      c.addChild(desc);
+      // 数值行：从 description 剥掉 [稀有度] 前缀和名称
+      let stat = opt.description;
+      const rarityName = RARITY_NAMES[opt.rarity] ?? '';
+      if (stat.startsWith(`[${rarityName}] `)) stat = stat.slice(rarityName.length + 3);
+      if (title && stat.startsWith(`${title} `)) stat = stat.slice(title.length + 1);
+      else if (title && stat.startsWith(title)) stat = stat.slice(title.length);
+
+      drawCyberCard(c, x, startY, boxWidth, boxHeight, color, rarityName, title, stat, selected, performance.now() / 1000);
     }
 
     const hint = makeText('← → 选择  回车/A 确认', { fontFamily: MONO, fontSize: 12, fill: 0x888888 }, 0.5, 0.5);
@@ -1838,16 +2342,7 @@ export class PixiRenderer {
       const x = startX + i * (boxWidth + 20);
       const selected = i === state.selectedIndex;
 
-      const gfx = new Graphics();
-      if (selected) {
-        gfx.rect(x - 2, startY - 2, boxWidth + 4, boxHeight + 4).stroke({ color: 0xffffff, width: 3 });
-      }
-      gfx.rect(x, startY, boxWidth, boxHeight).stroke({ color: 0xce93d8, width: 2 });
-      c.addChild(gfx);
-
-      const name = makeText(config.name, { fontFamily: MONO, fontSize: 14, fill: 0xce93d8 }, 0.5, 0.5);
-      name.position.set(x + boxWidth / 2, startY + 45);
-      c.addChild(name);
+      drawCyberCard(c, x, startY, boxWidth, boxHeight, 0xce93d8, '新武器', config.name, '获得辅助武器', selected, performance.now() / 1000);
     }
 
     const hint = makeText('← → 选择  回车/A 确认', { fontFamily: MONO, fontSize: 12, fill: 0x888888 }, 0.5, 0.5);
@@ -1952,6 +2447,9 @@ export class PixiRenderer {
     drawStat('击杀', `${char.killCount}`, 0xff9800);
     drawStat('经验', `${Math.floor(char.xp)} / ${char.xpToNextLevel}`, 0x76ff03);
     drawStat('金币', `${state.coins}`, 0xffc107);
+    drawStat('天赋点', `${state.talentPointsPerWeapon[state.selectedWeaponType ?? ''] ?? 0}`, 0x76ff03);
+    if (char.critChance > 0) drawStat('暴击', `${Math.round(char.critChance * 100)}%`, 0xffc107);
+    if (char.doubleStrikeChance > 0) drawStat('双刀', `${Math.round(char.doubleStrikeChance * 100)}%`, 0xffc107);
     y += 10;
 
     const drawMainWeaponBlock = () => {

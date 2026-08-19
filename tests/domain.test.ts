@@ -1,4 +1,22 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+/* 测试环境无 localStorage，提供内存版 shim（coins/talents 持久化均基于它） */
+const storage = new Map<string, string>();
+const storageShim: Storage = {
+  get length() {
+    return storage.size;
+  },
+  clear: () => storage.clear(),
+  getItem: (k) => (storage.has(k) ? storage.get(k)! : null),
+  key: (i) => Array.from(storage.keys())[i] ?? null,
+  removeItem: (k) => {
+    storage.delete(k);
+  },
+  setItem: (k, v) => {
+    storage.set(k, String(v));
+  },
+};
+vi.stubGlobal('localStorage', storageShim);
 import {
   WeaponTypeId,
   AuxiliaryWeaponType,
@@ -21,7 +39,17 @@ import { calculateDamage, applyDamage } from '../src/game/combat';
 import { generateUpgradeOptions, applyUpgrade, generateWeaponDropOptions } from '../src/game/upgrades';
 import { findAutoAimTarget } from '../src/game/collision';
 import { createChest } from '../src/game/spawner';
-import { createInitialGameState, updateGame, startNextStage } from '../src/game/gameLoop';
+import { createInitialGameState, updateGame, startNextStage, exitToMainMenu, selectWeapon } from '../src/game/gameLoop';
+import {
+  getTalentTree,
+  getTalentProgress,
+  spendTalentPoint,
+  addTalentPoints,
+  buildTalentTreeView,
+  applyTalentStats,
+  isNodeUnlocked,
+  rollCrit,
+} from '../src/game/talents';
 import { spawnEnemyWave } from '../src/game/spawner';
 import { ChestType, GamePhase, STAGE_DURATION, COINS_PER_KILL } from '../src/game/types';
 
@@ -320,27 +348,28 @@ describe('Auto-aim target selection', () => {
 });
 
 describe('Auxiliary weapon base stat buffs', () => {
-  it('missile base stats: uses placementCooldown (3s) as launch interval, explosive radius 40', () => {
+  it('missile base stats: 2s launch interval, 350 range, explosive radius 55', () => {
     const missile = createAuxiliaryWeapon(AuxiliaryWeaponType.Missile);
     expect(missile.stats.cooldown).toBe(0);
-    expect(missile.stats.placementCooldown).toBe(3);
-    expect(missile.stats.explosionRadius).toBe(40);
+    expect(missile.stats.placementCooldown).toBe(2);
+    expect(missile.stats.explosionRadius).toBe(55);
+    expect(missile.stats.range).toBe(350);
   });
 
-  it('wind wheel base damage is 25 (+150%) and rotation speed is 4.4 (+120%)', () => {
+  it('wind wheel base damage is 40 (+250%) and rotation speed is 4.4 (+120%)', () => {
     const ww = createAuxiliaryWeapon(AuxiliaryWeaponType.WindWheel);
-    expect(ww.stats.damage).toBe(25);
+    expect(ww.stats.damage).toBe(40);
     expect(ww.stats.rotationSpeed).toBeCloseTo(4.4);
     expect(ww.stats.range).toBe(40);
   });
 
-  it('turret base stats: damage 16 (+100%), fire rate 2 (+100%), no placement wait, explosive', () => {
+  it('turret base stats: damage 24, fire rate 3/s, 2 placements, 220 range, explosive', () => {
     const turret = createAuxiliaryWeapon(AuxiliaryWeaponType.Turret);
-    expect(turret.stats.damage).toBe(16);
-    expect(turret.stats.turretFireRate).toBe(2);
-    expect(turret.stats.placementCooldown).toBe(0);
-    expect(turret.stats.range).toBe(100);
-    expect(turret.stats.explosionRadius).toBeGreaterThan(0);
+    expect(turret.stats.damage).toBe(24);
+    expect(turret.stats.turretFireRate).toBe(3);
+    expect(turret.stats.placementCooldown).toBe(0.6);
+    expect(turret.stats.range).toBe(220);
+    expect(turret.stats.explosionRadius).toBe(45);
   });
 
   it('aux laser base damage is 21.6 (+80%)', () => {
@@ -351,11 +380,11 @@ describe('Auxiliary weapon base stat buffs', () => {
 });
 
 describe('SwordEnergy rework', () => {
-  it('has halved range (100) and gains duration/placement stats', () => {
+  it('has 300 range and 1s placement interval for reliable engagement', () => {
     const sword = createAuxiliaryWeapon(AuxiliaryWeaponType.SwordEnergy);
-    expect(sword.stats.range).toBe(100);
+    expect(sword.stats.range).toBe(300);
     expect(sword.stats.duration).toBe(2.5);
-    expect(sword.stats.placementCooldown).toBe(1.5);
+    expect(sword.stats.placementCooldown).toBe(1);
     expect(sword.stats.cooldown).toBe(0);
   });
 
@@ -372,10 +401,10 @@ describe('SwordEnergy rework', () => {
     }
   });
 
-  it('sword energy stops offering count upgrades once count is maxed (6)', () => {
+  it('sword energy stops offering count upgrades once count is maxed (3)', () => {
     const char = createCharacter(WeaponTypeId.MachineGun);
     const sword = createAuxiliaryWeapon(AuxiliaryWeaponType.SwordEnergy);
-    sword.stats.count = 6;
+    sword.stats.count = 3;
     char.auxWeapons.push(sword);
     for (let i = 0; i < 300; i++) {
       for (const opt of generateUpgradeOptions(char)) {
@@ -459,10 +488,175 @@ describe('Stage system', () => {
     expect(state.phase).toBe(GamePhase.Playing);
   });
 
+  it('exitToMainMenu settles coins for the current stage kills', () => {
+    const state = createInitialGameState();
+    state.phase = GamePhase.Playing;
+    state.stageLevel = 2;
+    state.stageKillCount = 30;
+    const next = exitToMainMenu(state);
+    expect(next.phase).toBe(GamePhase.WeaponSelect);
+    expect(next.lastStageResult).toEqual({ stage: 2, kills: 30, coinsEarned: 30 * 2 * COINS_PER_KILL });
+    expect(next.coins).toBe(state.coins + 30 * 2 * COINS_PER_KILL);
+  });
+
+  it('exitToMainMenu awards nothing when the run has no kills', () => {
+    const state = createInitialGameState();
+    const next = exitToMainMenu(state);
+    expect(next.lastStageResult).toBeNull();
+    expect(next.coins).toBe(state.coins);
+  });
+
   it('enemy starting health is multiplied by the stage level (+100% per stage)', () => {
     const pos = { x: 1500, y: 1500 };
     const w1 = spawnEnemyWave(pos, 1, 1, 1);
     const w3 = spawnEnemyWave(pos, 1, 1, 3);
     expect(w3[0].maxHealth).toBeCloseTo(w1[0].maxHealth * 3);
+  });
+});
+describe('Talent tree (MeleeBlade)', () => {
+  const seedStore = (levels: Record<string, number>, points = 10): void => {
+    localStorage.setItem('fireworld_talents', JSON.stringify({ melee_blade: { points, levels } }));
+  };
+
+  beforeEach(() => {
+    localStorage.removeItem('fireworld_talents');
+    localStorage.removeItem('fireworld_coins');
+  });
+
+  it('defines a 3/2/1-tier tree with 5 levels per talent', () => {
+    const tree = getTalentTree(WeaponTypeId.MeleeBlade);
+    expect(tree).not.toBeNull();
+    expect(tree!.nodes.length).toBe(6);
+    expect(tree!.nodes.filter((n) => n.tier === 1).length).toBe(3);
+    expect(tree!.nodes.filter((n) => n.tier === 2).length).toBe(2);
+    expect(tree!.nodes.filter((n) => n.tier === 3).length).toBe(1);
+    tree!.nodes.forEach((n) => {
+      expect(n.maxLevel).toBe(5);
+      expect(n.values.length).toBe(5);
+    });
+    // 近战刀天赋数值：移速/攻速逐级 +8%，攻击力/范围/暴击逐级 +10%，十字连斩几率逐级 +10%
+    const byId = (id: string) => tree!.nodes.find((n) => n.id === id)!;
+    expect(byId('move_speed').values).toEqual([8, 16, 24, 32, 40]);
+    expect(byId('attack_damage').values).toEqual([10, 20, 30, 40, 50]);
+    expect(byId('attack_speed').values).toEqual([8, 16, 24, 32, 40]);
+    expect(byId('attack_range').values).toEqual([10, 20, 30, 40, 50]);
+    expect(byId('crit_rate').values).toEqual([10, 20, 30, 40, 50]);
+    expect(byId('double_strike').values).toEqual([10, 20, 30, 40, 50]);
+  });
+
+  it('tier 2 unlocks at 5 tier-1 levels, tier 3 at 4 tier-2 levels', () => {
+    const tree = getTalentTree(WeaponTypeId.MeleeBlade)!;
+    const t2 = tree.nodes.find((n) => n.tier === 2)!;
+    const t3 = tree.nodes.find((n) => n.tier === 3)!;
+    const levels = { move_speed: 3, attack_damage: 2, attack_speed: 0 };
+
+    expect(isNodeUnlocked(tree, levels, t2)).toBe(true); // 3+2 = 5
+    expect(isNodeUnlocked(tree, levels, t3)).toBe(false); // tier2 0 < 4
+
+    levels.attack_range = 4;
+    expect(isNodeUnlocked(tree, levels, t3)).toBe(true); // tier2 = 4
+  });
+
+  it('spendTalentPoint consumes points, respects max level and locks', () => {
+    const tree = getTalentTree(WeaponTypeId.MeleeBlade)!;
+    seedStore({}, 3);
+    // 2 阶/3 阶未解锁时无法投入
+    expect(spendTalentPoint(WeaponTypeId.MeleeBlade, 'attack_range')).toBe(false);
+    expect(spendTalentPoint(WeaponTypeId.MeleeBlade, 'double_strike')).toBe(false);
+
+    // 1 阶可投入
+    expect(spendTalentPoint(WeaponTypeId.MeleeBlade, 'attack_damage')).toBe(true);
+    let p = getTalentProgress(WeaponTypeId.MeleeBlade);
+    expect(p.points).toBe(2);
+    expect(p.levels.attack_damage).toBe(1);
+
+    // 满级后无法继续投入
+    seedStore({ attack_damage: 5 }, 5);
+    expect(spendTalentPoint(WeaponTypeId.MeleeBlade, 'attack_damage')).toBe(false);
+    // 天赋点不足
+    seedStore({}, 0);
+    expect(spendTalentPoint(WeaponTypeId.MeleeBlade, 'move_speed')).toBe(false);
+
+    // 1 阶投入满 5 级后可解锁并投入 2 阶
+    seedStore({ move_speed: 3, attack_damage: 2 }, 5);
+    expect(spendTalentPoint(WeaponTypeId.MeleeBlade, 'attack_range')).toBe(true);
+    p = getTalentProgress(WeaponTypeId.MeleeBlade);
+    expect(p.levels.attack_range).toBe(1);
+    expect(p.points).toBe(4);
+
+    // 树定义被完整校验过
+    expect(tree.nodes.length).toBe(6);
+  });
+
+  it('addTalentPoints persists and accumulates', () => {
+    expect(getTalentProgress(WeaponTypeId.MeleeBlade).points).toBe(0);
+    expect(addTalentPoints(WeaponTypeId.MeleeBlade, 1)).toBe(1);
+    expect(addTalentPoints(WeaponTypeId.MeleeBlade, 2)).toBe(3);
+    expect(getTalentProgress(WeaponTypeId.MeleeBlade).points).toBe(3);
+  });
+
+  it('applyTalentStats applies percentage bonuses to the melee character', () => {
+    seedStore(
+      {
+        move_speed: 2,    // +16%
+        attack_damage: 3,  // +30%
+        attack_speed: 1,   // +8%
+        attack_range: 1,   // +10%
+        crit_rate: 2,      // 20%
+        double_strike: 1,  // 10%
+      },
+      0,
+    );
+    const char = createCharacter(WeaponTypeId.MeleeBlade);
+    applyTalentStats(char);
+    const base = WEAPON_CONFIGS[WeaponTypeId.MeleeBlade].baseStats;
+    expect(char.speed).toBeCloseTo(BASE_SPEED * 1.4 * 1.16);
+    expect(char.mainWeapon.stats.damage).toBeCloseTo(base.damage * 1.3);
+    expect(char.mainWeapon.stats.fireRate).toBeCloseTo(base.fireRate * 1.08);
+    expect(char.mainWeapon.stats.range).toBeCloseTo(base.range * 1.1);
+    expect(char.critChance).toBeCloseTo(0.2);
+    expect(char.doubleStrikeChance).toBeCloseTo(0.1);
+  });
+
+  it('rollCrit doubles damage when the roll lands', () => {
+    const normal = createCharacter(WeaponTypeId.MeleeBlade);
+    expect(rollCrit(normal, 10)).toEqual({ damage: 10, crit: false });
+
+    const critter = createCharacter(WeaponTypeId.MeleeBlade);
+    critter.critChance = 0.5;
+    const spy = vi.spyOn(Math, 'random').mockReturnValue(0);
+    expect(rollCrit(critter, 10)).toEqual({ damage: 20, crit: true });
+    spy.mockRestore();
+  });
+
+  it('buildTalentTreeView reflects levels, unlocks and affordability', () => {
+    seedStore({}, 3);
+    const view = buildTalentTreeView(WeaponTypeId.MeleeBlade)!;
+    expect(view.points).toBe(3);
+    expect(view.nodes.length).toBe(6);
+    expect(view.nodes[0].canUpgrade).toBe(true);
+    expect(view.nodes[3].unlocked).toBe(false);
+    expect(view.nodes[3].lockHint).toContain('1 阶');
+
+    seedStore({ attack_damage: 5 }, 0);
+    const view2 = buildTalentTreeView(WeaponTypeId.MeleeBlade)!;
+    expect(view2.nodes[1].maxed).toBe(true);
+    expect(view2.nodes[1].curValue).toBe('+50%');
+    expect(view2.nodes[3].unlocked).toBe(true); // 1 阶累计 5 级
+    expect(view2.nodes[3].canUpgrade).toBe(false); // 无点数
+    expect(view2.nodes[5].unlocked).toBe(false); // 2 阶 0 级 < 4
+  });
+
+  it('completing a stage grants one talent point to the active character', () => {
+    const state = createInitialGameState();
+    selectWeapon(state, WeaponTypeId.MeleeBlade);
+    const before = state.talentPointsPerWeapon[WeaponTypeId.MeleeBlade] ?? 0;
+    state.phase = GamePhase.Playing;
+    state.stageKillCount = 10;
+    state.stageElapsedTime = STAGE_DURATION - 0.01;
+    updateGame(state, 0.01, { x: 0, y: 0 });
+    expect(state.phase).toBe(GamePhase.LevelComplete);
+    expect(state.talentPointsPerWeapon[WeaponTypeId.MeleeBlade]).toBe(before + 1);
+    expect(getTalentProgress(WeaponTypeId.MeleeBlade).points).toBe(before + 1);
   });
 });

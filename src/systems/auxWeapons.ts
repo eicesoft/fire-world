@@ -64,13 +64,13 @@ function updateMissile(state: GameState, aux: AuxiliaryWeapon, dt: number): void
     const proj: Projectile = {
       id: `aux_missile_${nextEntityId++}`,
       position: { x: state.character.position.x, y: state.character.position.y },
-      velocity: { x: Math.cos(angle) * 300, y: Math.sin(angle) * 300 },
+      velocity: { x: Math.cos(angle) * 400, y: Math.sin(angle) * 400 },
       damage: aux.stats.damage,
       penetration: 1,
       hitEnemies: new Set<string>(),
       ownerId: 'character',
-      lifetime: 1.5,
-      maxLifetime: 1.5,
+      lifetime: 1.8,
+      maxLifetime: 1.8,
       weaponType: 'missile' as any,
       explosionRadius: aux.stats.explosionRadius,
       projectileSize: 3,
@@ -80,10 +80,16 @@ function updateMissile(state: GameState, aux: AuxiliaryWeapon, dt: number): void
   aux.cooldownTimer = Math.max(0.15, aux.stats.placementCooldown);
 }
 
+const WIND_TICK = 0.22;
+
 function updateWindWheel(state: GameState, aux: AuxiliaryWeapon, dt: number): void {
   const count = Math.max(1, Math.min(Math.floor(aux.stats.count), 6));
   const radius = 80;
   const bladeSize = Math.max(6, aux.stats.range * 0.15);
+  // 按敌人分桶累计接触伤害，每 0.22s 结算一次，保证伤害数字为可见整数（不逐帧刷小数）
+  const hits = ((aux as unknown as { windHits?: Record<string, { dmg: number; t: number }> }).windHits ??= {});
+  const frameDmg = new Map<string, number>();
+
   for (let i = 0; i < count; i++) {
     const angle = aux.rotationAngle + (i / count) * Math.PI * 2;
     const bx = state.character.position.x + Math.cos(angle) * radius;
@@ -91,14 +97,35 @@ function updateWindWheel(state: GameState, aux: AuxiliaryWeapon, dt: number): vo
 
     for (const enemy of state.enemies) {
       if (distance({ x: bx, y: by }, enemy.position) < enemy.size + bladeSize) {
-        enemy.health -= aux.stats.damage * dt;
+        frameDmg.set(enemy.id, (frameDmg.get(enemy.id) ?? 0) + aux.stats.damage * dt);
+      }
+    }
+  }
+
+  for (const [id, dmg] of frameDmg) {
+    const h = hits[id];
+    if (!h) hits[id] = { dmg, t: WIND_TICK };
+    else h.dmg += dmg;
+  }
+
+  for (const id of Object.keys(hits)) {
+    const h = hits[id];
+    h.t -= dt;
+    if (h.t <= 0) {
+      const enemy = state.enemies.find((en) => en.id === id);
+      if (enemy && h.dmg > 0) {
+        enemy.health -= h.dmg;
         state.damageNumbers.push({
           position: { x: enemy.position.x, y: enemy.position.y - enemy.size },
-          value: Math.ceil(aux.stats.damage * dt),
+          value: Math.max(1, Math.round(h.dmg)),
           timer: 0.5,
           maxTimer: 0.5,
         });
       }
+      delete hits[id];
+    } else if (!frameDmg.has(id)) {
+      // 敌人脱离接触：清零累计，避免残量堆叠
+      h.dmg = 0;
     }
   }
 }

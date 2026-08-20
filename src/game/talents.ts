@@ -24,7 +24,7 @@ import {
 /**
  * 每位主武器角色的天赋树。
  * 结构：1 阶 3 个、2 阶 2 个、3 阶 1 个；每个天赋最多 5 级。
- * 目前只有近战刀（MeleeBlade）完成设计，其余武器暂无天赋树。
+ * 目前近战刀（MeleeBlade）、机关枪（MachineGun）与电波枪（ElectricWave）已完成设计，其余武器暂无天赋树。
  */
 export const TALENT_TREES: Record<WeaponTypeId, TalentTreeDef | null> = {
   [WeaponTypeId.MeleeBlade]: {
@@ -89,12 +89,135 @@ export const TALENT_TREES: Record<WeaponTypeId, TalentTreeDef | null> = {
       },
     ],
   },
+  [WeaponTypeId.MachineGun]: {
+    weaponType: WeaponTypeId.MachineGun,
+    nodes: [
+      // ── 1 阶（3 个）────────────────────────────────────────────
+      {
+        id: TalentNodeId.AttackDamage,
+        name: '火力强化',
+        desc: '攻击力',
+        tier: 1,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [10, 20, 30, 40, 50],
+        unit: '%',
+      },
+      {
+        id: TalentNodeId.AttackSpeed,
+        name: '射速提升',
+        desc: '攻击速度',
+        tier: 1,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [8, 16, 24, 32, 40],
+        unit: '%',
+      },
+      {
+        id: TalentNodeId.ReloadSpeed,
+        name: '快速装填',
+        desc: '换弹时间',
+        tier: 1,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [10, 20, 30, 40, 50],
+        unit: '%',
+        decrease: true,
+      },
+      // ── 2 阶（2 个）────────────────────────────────────────────
+      {
+        id: TalentNodeId.Penetration,
+        name: '穿甲弹头',
+        desc: '穿透（一颗子弹可命中多个敌人）',
+        tier: 2,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [1, 2, 3, 4, 5],
+        unit: '',
+      },
+      {
+        id: TalentNodeId.CritRate,
+        name: '精准打击',
+        desc: '暴击率（暴击造成双倍伤害）',
+        tier: 2,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [10, 20, 30, 40, 50],
+        unit: '%',
+      },
+      // ── 3 阶（1 个）────────────────────────────────────────────
+      {
+        id: TalentNodeId.BulletCount,
+        name: '弹幕倾泻',
+        desc: '每次射击子弹数量',
+        tier: 3,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [1, 2, 3, 4, 5],
+        unit: '',
+      },
+    ],
+  },
+  [WeaponTypeId.ElectricWave]: {
+    weaponType: WeaponTypeId.ElectricWave,
+    nodes: [
+      // ── 1 阶（3 个）────────────────────────────────────────────
+      {
+        id: TalentNodeId.AttackDamage,
+        name: '高压电击',
+        desc: '攻击力',
+        tier: 1,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [10, 20, 30, 40, 50],
+        unit: '%',
+      },
+      {
+        id: TalentNodeId.AttackSpeed,
+        name: '频率提升',
+        desc: '攻击速度',
+        tier: 1,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [8, 16, 24, 32, 40],
+        unit: '%',
+      },
+      {
+        id: TalentNodeId.ReleaseTime,
+        name: '瞬时释放',
+        desc: '释放时间',
+        tier: 1,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [10, 20, 30, 40, 50],
+        unit: '%',
+        decrease: true,
+      },
+      // ── 2 阶（2 个）────────────────────────────────────────────
+      {
+        id: TalentNodeId.ChainCount,
+        name: '连环跳跃',
+        desc: '额外连锁次数',
+        tier: 2,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [1, 2, 3, 4, 5],
+        unit: '',
+      },
+      {
+        id: TalentNodeId.ChainRange,
+        name: '广域传导',
+        desc: '连锁范围',
+        tier: 2,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [10, 20, 30, 40, 50],
+        unit: '%',
+      },
+      // ── 3 阶（1 个）────────────────────────────────────────────
+      {
+        id: TalentNodeId.ChainGrowth,
+        name: '递增电流',
+        desc: '连锁伤害逐次提高（第 j 跳伤害 = 基础 × (1 + j·X%)）',
+        tier: 3,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [10, 20, 30, 40, 50],
+        unit: '%',
+      },
+    ],
+  },
   // 其余武器暂无天赋树
-  [WeaponTypeId.MachineGun]: null,
-  [WeaponTypeId.Shotgun]: null,
   [WeaponTypeId.Flamethrower]: null,
   [WeaponTypeId.LaserGun]: null,
-  [WeaponTypeId.Bow]: null,
 };
 
 export function getTalentTree(weaponType: WeaponTypeId): TalentTreeDef | null {
@@ -213,6 +336,7 @@ export function buildTalentTreeView(weaponType: WeaponTypeId): TalentTreeView | 
     const maxed = level >= node.maxLevel;
     const curValue = node.values[Math.max(0, level - 1)];
     const nextValue = node.values[level] ?? 0;
+    const sign = node.decrease ? '-' : '+';
     return {
       id: node.id,
       name: node.name,
@@ -220,8 +344,8 @@ export function buildTalentTreeView(weaponType: WeaponTypeId): TalentTreeView | 
       tier: node.tier,
       maxLevel: node.maxLevel,
       level,
-      curValue: level > 0 ? `+${curValue}${node.unit}` : '未激活',
-      nextValue: maxed ? '' : `+${nextValue}${node.unit}`,
+      curValue: level > 0 ? `${sign}${curValue}${node.unit}` : '未激活',
+      nextValue: maxed ? '' : `${sign}${nextValue}${node.unit}`,
       unlocked,
       canUpgrade: unlocked && !maxed && progress.points >= TALENT_UPGRADE_COST,
       maxed,
@@ -266,6 +390,13 @@ export function applyTalentStats(char: Character): void {
   const rangePct = levelOf(tree, levels, TalentNodeId.AttackRange);
   const critPct = levelOf(tree, levels, TalentNodeId.CritRate);
   const doublePct = levelOf(tree, levels, TalentNodeId.DoubleStrike);
+  const reloadPct = levelOf(tree, levels, TalentNodeId.ReloadSpeed);
+  const penFlat = levelOf(tree, levels, TalentNodeId.Penetration);
+  const bulletFlat = levelOf(tree, levels, TalentNodeId.BulletCount);
+  const releasePct = levelOf(tree, levels, TalentNodeId.ReleaseTime);
+  const chainFlat = levelOf(tree, levels, TalentNodeId.ChainCount);
+  const chainRangePct = levelOf(tree, levels, TalentNodeId.ChainRange);
+  const chainGrowthPct = levelOf(tree, levels, TalentNodeId.ChainGrowth);
 
   const preset = WEAPON_CHARACTER_PRESETS[char.mainWeapon.typeId] ?? { speedMultiplier: 1, health: BASE_MAX_HEALTH };
   char.speed = BASE_SPEED * preset.speedMultiplier * (1 + speedPct / 100);
@@ -274,6 +405,30 @@ export function applyTalentStats(char: Character): void {
   char.mainWeapon.stats.range *= 1 + rangePct / 100;
   char.critChance = critPct / 100;
   char.doubleStrikeChance = doublePct / 100;
+  // 快速装填：缩短换弹时间（保留近战刀 reloadSpeed=0 不受影响）
+  if (reloadPct > 0) {
+    char.mainWeapon.stats.reloadSpeed = Math.max(0.1, char.mainWeapon.stats.reloadSpeed * (1 - reloadPct / 100));
+  }
+  if (penFlat > 0) {
+    char.mainWeapon.stats.penetration += penFlat;
+  }
+  if (bulletFlat > 0) {
+    char.mainWeapon.stats.bulletCount += bulletFlat;
+  }
+  // 电波枪专属：释放时间缩短（decrease 节点 → 反向乘算）
+  const weapon = char.mainWeapon;
+  if (releasePct > 0 && weapon.stats.releaseTime !== undefined) {
+    weapon.stats.releaseTime = Math.max(0.05, weapon.stats.releaseTime * (1 - releasePct / 100));
+  }
+  if (chainFlat > 0) {
+    weapon.stats.chainCount = (weapon.stats.chainCount ?? 0) + chainFlat;
+  }
+  if (chainRangePct > 0) {
+    weapon.stats.chainRange = (weapon.stats.chainRange ?? 120) * (1 + chainRangePct / 100);
+  }
+  if (chainGrowthPct > 0) {
+    weapon.stats.chainGrowthPct = chainGrowthPct;
+  }
 }
 
 /** 伤害结算辅助：按角色暴击率掷骰，返回 (最终伤害, 是否暴击) */

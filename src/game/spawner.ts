@@ -11,6 +11,8 @@ import {
   WEAPON_CONFIGS,
   WeaponTypeId,
   Obstacle,
+  ENEMY_HP_BASE_MULT,
+  ENEMY_HP_MINUTE_GROWTH,
 } from './types';
 import { getXpFromEnemy } from './character';
 
@@ -61,14 +63,22 @@ function randomSpawnPosition(characterPos: Vector2, minDist: number, maxDist: nu
   return { x, y };
 }
 
+/** 当前血量缩放系数：统一 +20% × 每过 1 分钟 +25%（按已过整分钟数乘方） */
+function currentHpMult(stageElapsedTime: number): number {
+  const minutes = Math.floor(Math.max(0, stageElapsedTime) / 60);
+  return ENEMY_HP_BASE_MULT * ENEMY_HP_MINUTE_GROWTH ** minutes;
+}
+
 export function spawnEnemyWave(
   characterPos: Vector2,
   level: number,
   count: number,
   stageLevel: number = 1,
+  stageElapsedTime: number = 0,
 ): Enemy[] {
   const types = getAvailableEnemyTypes(level);
   const enemies: Enemy[] = [];
+  const hpMult = currentHpMult(stageElapsedTime);
   for (let i = 0; i < count; i++) {
     const config = types[Math.floor(Math.random() * types.length)];
     const pos = randomSpawnPosition(characterPos, 400, 600);
@@ -76,12 +86,13 @@ export function spawnEnemyWave(
     const timeMult = 1 + (level - 1) * 0.1;
     // 关卡等级每提升 1 级，怪物起始血量 +100%（关卡 1 为 1 倍，关卡 2 为 2 倍…）
     const stageHpMult = stageLevel;
+    const health = config.health * timeMult * stageHpMult * hpMult;
     enemies.push({
       id: `enemy_${nextEnemyId++}`,
       configId: config.id,
       position: pos,
-      health: config.health * timeMult * stageHpMult,
-      maxHealth: config.health * timeMult * stageHpMult,
+      health,
+      maxHealth: health,
       speed: config.speed,
       damage: config.damage,
       xpValue: config.xpValue * xpMult,
@@ -95,10 +106,10 @@ export function spawnEnemyWave(
   return enemies;
 }
 
-export function spawnMiniBoss(characterPos: Vector2, level: number, stageLevel: number = 1): Enemy {
+export function spawnMiniBoss(characterPos: Vector2, level: number, stageLevel: number = 1, stageElapsedTime: number = 0): Enemy {
   const pos = randomSpawnPosition(characterPos, 400, 500);
   const xpMult = getXpFromEnemy(level);
-  const hp = MINI_BOSS_CONFIG.health * (1 + (level - 1) * 0.15) * stageLevel;
+  const hp = MINI_BOSS_CONFIG.health * (1 + (level - 1) * 0.15) * stageLevel * currentHpMult(stageElapsedTime);
   return {
     id: `mini_boss_${nextEnemyId++}`,
     configId: 'mini_boss',

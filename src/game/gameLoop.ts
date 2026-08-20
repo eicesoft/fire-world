@@ -10,6 +10,8 @@ import {
   SlashEffect,
   BeamEffect,
   DamageNumber,
+  Character,
+  Weapon,
   MAP_WIDTH,
   MAP_HEIGHT,
   MAX_AUX_SLOTS,
@@ -34,6 +36,85 @@ let nextProjectileId = 0;
 
 function projectileSpeed(weaponType: WeaponTypeId): number {
   return weaponType === WeaponTypeId.Flamethrower ? 350 : 500;
+}
+
+/** 电波枪连锁电弧颜色 */
+const ELECTRIC_BEAM_COLOR = '#b388ff';
+
+/** 最近一次电波枪开火的连锁命中数（DEV 调试用） */
+export let lastElectricChainHits = 0;
+let lastElectricChainLogAt = 0;
+
+/**
+ * 电波枪弹射起点：在射程内挑选「身边连锁范围内敌人最多」的目标（打团中心），
+ * 同票数时取离玩家最近者；无法命中任何目标时返回 null。
+ */
+function pickChainStart(pos: Vector2, enemies: Enemy[], weaponRange: number, chainRange: number): Enemy | null {
+  let best: Enemy | null = null;
+  let bestScore = -1;
+  let bestDist = Infinity;
+  for (const e of enemies) {
+    if (distance(pos, e.position) > weaponRange) continue;
+    let neighbors = 0;
+    for (const o of enemies) {
+      if (o !== e && distance(e.position, o.position) <= chainRange) neighbors++;
+    }
+    const dStart = distance(pos, e.position);
+    if (neighbors > bestScore || (neighbors === bestScore && dStart < bestDist)) {
+      bestScore = neighbors;
+      bestDist = dStart;
+      best = e;
+    }
+  }
+  return best;
+}
+
+/**
+ * 电波枪：对首目标造成伤害后，在 chainRange 内逐跳贴近未命中敌人，
+ * 每跳伤害按 chainGrowthPct 逐次提高（第 j 跳 = 基础 × (1 + j·growth%)）。
+ * 首段暴击只在第一次命中时展示 critical 标记。
+ */
+function fireElectricChain(state: GameState, char: Character, weapon: Weapon, firstTarget: Enemy): void {
+  const baseDamage = weapon.stats.damage;
+  const chainCount = Math.max(0, Math.floor(weapon.stats.chainCount ?? 0));
+  const chainRange = weapon.stats.chainRange ?? 300;
+  const growthPct = weapon.stats.chainGrowthPct ?? 0;
+  const { damage: firstDmg, crit } = rollCrit(char, baseDamage);
+
+  const hitIds = new Set<string>([firstTarget.id]);
+  let current = firstTarget;
+  let prevPos: Vector2 = { x: char.position.x, y: char.position.y };
+
+  for (let j = 0; j <= chainCount; j++) {
+    const dmg = Math.round(firstDmg * (1 + (j * growthPct) / 100));
+    current.health -= dmg;
+    state.damageNumbers.push({
+      position: { x: current.position.x, y: current.position.y - current.size },
+      value: dmg, timer: 0.6, maxTimer: 0.6, critical: crit && j === 0,
+    });
+    state.beamEffects.push({
+      origin: prevPos,
+      end: { x: current.position.x, y: current.position.y },
+      color: ELECTRIC_BEAM_COLOR,
+      timer: 0.25,
+      width: 8,
+    });
+    if (j >= chainCount) break;
+    const next = findNearestEnemy(current.position, state.enemies, chainRange, hitIds);
+    if (!next) break;
+    hitIds.add(next.id);
+    prevPos = { x: current.position.x, y: current.position.y };
+    current = next;
+  }
+  lastElectricChainHits = hitIds.size;
+  // DEV 调试：开火后每 ~0.6s 回显一次连锁命中数，方便确认连锁生效
+  if (import.meta.env.DEV) {
+    const now = performance.now();
+    if (now - lastElectricChainLogAt > 600) {
+      lastElectricChainLogAt = now;
+      console.log(`[电波枪] 连锁命中 ${hitIds.size} 个敌人`);
+    }
+  }
 }
 
 function predictAimPoint(origin: Vector2, target: Enemy, projectileSpeed: number): Vector2 {
@@ -255,21 +336,35 @@ function updateMainWeapon(state: GameState, dt: number): void {
     }
   } else {
     if (!target) return;
-    const aimPoint = predictAimPoint(char.position, target, projectileSpeed(weapon.typeId));
-    const aimAngle = angleBetween(char.position, aimPoint);
-    for (let i = 0; i < weapon.stats.bulletCount; i++) {
-      const spread = (Math.random() - 0.5) * 0.2;
-      const finalAngle = aimAngle + spread;
-      const aimDist = weapon.typeId === WeaponTypeId.Flamethrower ? weapon.stats.range : 100;
-      const aimPos: Vector2 = { x: char.position.x + Math.cos(finalAngle) * aimDist, y: char.position.y + Math.sin(finalAngle) * aimDist };
-      const projSize = weapon.typeId === WeaponTypeId.Flamethrower ? weapon.stats.range : 3;
-      const { damage, crit } = rollCrit(char, weapon.stats.damage);
-      const proj = createProjectile(char.position, aimPos, damage, weapon.stats.penetration, weapon.typeId, 0, projSize);
-      proj.crit = crit;
-      state.projectiles.push(proj);
+    if (weapon.typeId === WeaponTypeId.ElectricWave) {
+      // 电波枪：从人群中心起跳，单目标命中 + 连锁瞬间结算（不产生弹丸）
+      const start = pickChainStart(char.position, state.enemies, weapon.stats.range, weapon.stats.chainRange ?? 300);
+      if (start) {
+        const chainDir = angleBetween(char.position, start.position);
+        state.mouseDirection = { x: Math.cos(chainDir), y: Math.sin(chainDir) };
+        fireElectricChain(state, char, weapon, start);
+      }
+    } else {
+      const aimPoint = predictAimPoint(char.position, target, projectileSpeed(weapon.typeId));
+      const aimAngle = angleBetween(char.position, aimPoint);
+      for (let i = 0; i < weapon.stats.bulletCount; i++) {
+        const spread = (Math.random() - 0.5) * 0.2;
+        const finalAngle = aimAngle + spread;
+        const aimDist = weapon.typeId === WeaponTypeId.Flamethrower ? weapon.stats.range : 100;
+        const aimPos: Vector2 = { x: char.position.x + Math.cos(finalAngle) * aimDist, y: char.position.y + Math.sin(finalAngle) * aimDist };
+        const projSize = weapon.typeId === WeaponTypeId.Flamethrower ? weapon.stats.range : 3;
+        const { damage, crit } = rollCrit(char, weapon.stats.damage);
+        const proj = createProjectile(char.position, aimPos, damage, weapon.stats.penetration, weapon.typeId, 0, projSize);
+        proj.crit = crit;
+        state.projectiles.push(proj);
+      }
+      weapon.currentAmmo--;
     }
-    weapon.currentAmmo--;
-    weapon.fireCooldown = 1 / weapon.stats.fireRate;
+    // 电波枪：攻击间隔 = 释放时间 × 基础攻速/当前攻速（攻速与释放时间天赋共同生效），下限 0.05s
+    const baseFireRate = WEAPON_CONFIGS[weapon.typeId].baseStats.fireRate;
+    weapon.fireCooldown = weapon.stats.releaseTime !== undefined
+      ? Math.max(0.05, (weapon.stats.releaseTime * baseFireRate) / weapon.stats.fireRate)
+      : 1 / weapon.stats.fireRate;
   }
 }
 
@@ -440,7 +535,7 @@ function spawnEnemies(state: GameState): void {
   const expectedEnemies = Math.min(50, 5 + state.elapsedTime * 0.5);
   if (state.enemies.length < expectedEnemies) {
     const toSpawn = Math.min(5, Math.ceil(expectedEnemies - state.enemies.length));
-    const newEnemies = spawnEnemyWave(state.character.position, state.character.level, toSpawn, state.stageLevel);
+    const newEnemies = spawnEnemyWave(state.character.position, state.character.level, toSpawn, state.stageLevel, state.stageElapsedTime);
     state.enemies.push(...newEnemies);
   }
 }

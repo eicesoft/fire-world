@@ -78,9 +78,9 @@ describe('Character creation', () => {
     expect(char.position.y).toBe(MAP_HEIGHT / 2);
   });
 
-  it('creates a character with Shotgun', () => {
-    const char = createCharacter(WeaponTypeId.Shotgun);
-    expect(char.mainWeapon.typeId).toBe(WeaponTypeId.Shotgun);
+  it('creates a character with ElectricWave', () => {
+    const char = createCharacter(WeaponTypeId.ElectricWave);
+    expect(char.mainWeapon.typeId).toBe(WeaponTypeId.ElectricWave);
   });
 
   it('creates a character with MeleeBlade', () => {
@@ -96,8 +96,8 @@ describe('Per-weapon character presets', () => {
     expect(c.health).toBe(100);
   });
 
-  it('shotgun: slow, durable (speed 160, hp 130)', () => {
-    const c = createCharacter(WeaponTypeId.Shotgun);
+  it('electric wave: slow, durable (speed 160, hp 130)', () => {
+    const c = createCharacter(WeaponTypeId.ElectricWave);
     expect(c.speed).toBeCloseTo(160);
     expect(c.health).toBe(130);
   });
@@ -114,11 +114,6 @@ describe('Per-weapon character presets', () => {
     expect(c.health).toBe(120);
   });
 
-  it('bow: fast, fragile (speed 250, hp 80)', () => {
-    const c = createCharacter(WeaponTypeId.Bow);
-    expect(c.speed).toBeCloseTo(250);
-    expect(c.health).toBe(80);
-  });
 });
 
 describe('Weapon creation', () => {
@@ -143,9 +138,13 @@ describe('Weapon creation', () => {
     expect(machineGun.stats.penetration).toBe(1);
     expect(machineGun.stats.range).toBe(150);
 
-    const shotgun = createWeapon(WeaponTypeId.Shotgun);
-    expect(shotgun.stats.damage).toBe(7);
-    expect(shotgun.stats.bulletCount).toBe(5);
+    const electric = createWeapon(WeaponTypeId.ElectricWave);
+    expect(electric.stats.damage).toBe(12);
+    expect(electric.stats.chainCount).toBe(3);
+    expect(electric.stats.releaseTime).toBe(0.3);
+    expect(electric.stats.chainRange).toBe(300);
+    expect(electric.stats.magazineCapacity).toBe(Infinity);
+    expect(electric.stats.bulletCount).toBe(0);
 
     const melee = createWeapon(WeaponTypeId.MeleeBlade);
     expect(melee.stats.damage).toBe(25);
@@ -261,6 +260,25 @@ describe('Upgrade system', () => {
         }
       }
     }
+  });
+
+  it('electric wave only offers fireRate/damage/chainCount/chainRange upgrades', () => {
+    const char = createCharacter(WeaponTypeId.ElectricWave);
+    const allowed = new Set(['fireRate', 'damage', 'chainCount', 'chainRange']);
+    for (let i = 0; i < 300; i++) {
+      for (const opt of generateUpgradeOptions(char)) {
+        if (opt.target === 'main_weapon' && opt.weaponTypeId === WeaponTypeId.ElectricWave) {
+          expect(allowed.has(opt.stat as string)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('electric wave applyUpgrade boosts chain range additively', () => {
+    const char = createCharacter(WeaponTypeId.ElectricWave);
+    const before = char.mainWeapon.stats.chainRange!;
+    applyUpgrade(char, { target: 'main_weapon', weaponTypeId: WeaponTypeId.ElectricWave, stat: 'chainRange', statDelta: 10, description: '+10 连锁范围', rarity: Rarity.Common });
+    expect(char.mainWeapon.stats.chainRange).toBe(before + 10);
   });
 
   it('wind wheel offers rotation speed upgrades', () => {
@@ -416,6 +434,81 @@ describe('SwordEnergy rework', () => {
   });
 });
 
+describe('ElectricWave chain behavior', () => {
+  const makeElectricState = (enemies: Enemy[]) => {
+    const state = createInitialGameState();
+    state.phase = GamePhase.Playing;
+    state.character = createCharacter(WeaponTypeId.ElectricWave);
+    state.character.position = { x: 1000, y: 1000 };
+    state.enemies = enemies;
+    return state;
+  };
+
+  it('hits the initial target then chains through nearby enemies without spawning bullets', () => {
+    const e1 = makeEnemy('e1', 1000 + 80, 1000);
+    const e2 = makeEnemy('e2', 1000 + 180, 1000); // 距 e1 100 < chainRange
+    const e3 = makeEnemy('e3', 1000 + 280, 1000); // 距 e2 100 < chainRange
+    const state = makeElectricState([e1, e2, e3]);
+    updateGame(state, 1 / 60, { x: 0, y: 0 });
+    expect(e1.health).toBeLessThan(e1.maxHealth);
+    expect(e2.health).toBeLessThan(e2.maxHealth);
+    expect(e3.health).toBeLessThan(e3.maxHealth);
+    expect(state.projectiles.length).toBe(0); // 电波枪不产生弹丸
+  });
+
+  it('does not chain beyond chainRange and ammo stays infinite', () => {
+    const e1 = makeEnemy('e1', 1000 + 80, 1000);
+    const far = makeEnemy('far', 1000 + 400, 1000); // 距 e1 320 > chainRange
+    const state = makeElectricState([e1, far]);
+    updateGame(state, 1 / 60, { x: 0, y: 0 });
+    expect(e1.health).toBeLessThan(e1.maxHealth);
+    expect(far.health).toBe(far.maxHealth);
+    expect(state.character.mainWeapon.currentAmmo).toBe(Infinity);
+  });
+
+  it('respects releaseTime as the firing interval floor', () => {
+    const state = makeElectricState([]);
+    // 无敌人：不放炮；有敌人时攻击间隔为 releaseTime(0.3s)
+    updateGame(state, 1 / 60, { x: 0, y: 0 });
+    expect(state.character.mainWeapon.fireCooldown).toBe(0);
+    const e1 = makeEnemy('e1', 1000 + 80, 1000);
+    state.enemies = [e1];
+    updateGame(state, 1 / 60, { x: 0, y: 0 });
+    expect(state.character.mainWeapon.fireCooldown).toBeCloseTo(0.3);
+  });
+
+  it('never chains back to an already-hit enemy within a single attack', () => {
+    // 三个怪彼此距离 100（< chainRange），连锁耗尽后即使 e2 身边只剩已命中的 e1，也不会回头打 e1
+    const e1 = makeEnemy('e1', 1000 + 80, 1000);
+    const e2 = makeEnemy('e2', 1000 + 180, 1000);
+    const e3 = makeEnemy('e3', 1000 + 280, 1000);
+    const state = makeElectricState([e1, e2, e3]);
+    state.character.mainWeapon.stats.chainCount = 5; // 跳数多于敌人数
+    state.character.mainWeapon.stats.damage = 10;
+    updateGame(state, 1 / 60, { x: 0, y: 0 });
+    // 一次攻击最多命中 3 个敌人，每个只被打一次（12 伤害基础值下不会双倍掉血）
+    expect(e1.maxHealth - e1.health).toBe(10);
+    expect(e2.maxHealth - e2.health).toBe(10);
+    expect(e3.maxHealth - e3.health).toBe(10);
+  });
+
+  it('starts the chain from the densest cluster, not the closest enemy', () => {
+    const state = makeElectricState([]);
+    // 玩家身后聚一团（彼此 < 250），身前一个孤立怪（离团 > 250、在射程内）
+    const lone = makeEnemy('lone', 1000 + 240, 1000);
+    const g1 = makeEnemy('g1', 1000 - 140, 1000);
+    const g2 = makeEnemy('g2', 1000 - 160, 1000 + 60);
+    const g3 = makeEnemy('g3', 1000 - 120, 1000 - 40);
+    state.enemies = [lone, g1, g2, g3];
+    updateGame(state, 1 / 60, { x: 0, y: 0 });
+    // 孤立怪不被命中，密集团从团中心起跳全部命中
+    expect(lone.health).toBe(lone.maxHealth);
+    expect(g1.health).toBeLessThan(g1.maxHealth);
+    expect(g2.health).toBeLessThan(g2.maxHealth);
+    expect(g3.health).toBeLessThan(g3.maxHealth);
+  });
+});
+
 describe('Chest drops', () => {
   it('creates chests of all five types (health/maxhp/speed/range/xp)', () => {
     const seen = new Set<ChestType>();
@@ -511,6 +604,20 @@ describe('Stage system', () => {
     const w1 = spawnEnemyWave(pos, 1, 1, 1);
     const w3 = spawnEnemyWave(pos, 1, 1, 3);
     expect(w3[0].maxHealth).toBeCloseTo(w1[0].maxHealth * 3);
+  });
+
+  it('enemy health is +20% uniformly and +25% per elapsed minute', () => {
+    const pos = { x: 1500, y: 1500 };
+    const w0 = spawnEnemyWave(pos, 1, 1, 1, 0);
+    const w20s = spawnEnemyWave(pos, 1, 1, 1, 20);
+    const w60s = spawnEnemyWave(pos, 1, 1, 1, 60);
+    const w150s = spawnEnemyWave(pos, 1, 1, 1, 150);
+    // 统一 +20% 基准
+    expect(w0[0].maxHealth).toBeCloseTo(20 * 1.2);
+    // 同一分钟内不变，跨分钟 +25% 乘方叠加
+    expect(w20s[0].maxHealth).toBeCloseTo(w0[0].maxHealth);
+    expect(w60s[0].maxHealth).toBeCloseTo(w0[0].maxHealth * 1.25);
+    expect(w150s[0].maxHealth).toBeCloseTo(w0[0].maxHealth * 1.25 ** 2);
   });
 });
 describe('Talent tree (MeleeBlade)', () => {
@@ -658,5 +765,161 @@ describe('Talent tree (MeleeBlade)', () => {
     expect(state.phase).toBe(GamePhase.LevelComplete);
     expect(state.talentPointsPerWeapon[WeaponTypeId.MeleeBlade]).toBe(before + 1);
     expect(getTalentProgress(WeaponTypeId.MeleeBlade).points).toBe(before + 1);
+  });
+});
+
+describe('Talent tree (MachineGun)', () => {
+  const seedStore = (levels: Record<string, number>, points = 10): void => {
+    localStorage.setItem('fireworld_talents', JSON.stringify({ machine_gun: { points, levels } }));
+  };
+
+  beforeEach(() => {
+    localStorage.removeItem('fireworld_talents');
+    localStorage.removeItem('fireworld_coins');
+  });
+
+  it('defines a 3/2/1-tier tree with 5 levels per talent', () => {
+    const tree = getTalentTree(WeaponTypeId.MachineGun);
+    expect(tree).not.toBeNull();
+    expect(tree!.nodes.length).toBe(6);
+    expect(tree!.nodes.filter((n) => n.tier === 1).length).toBe(3);
+    expect(tree!.nodes.filter((n) => n.tier === 2).length).toBe(2);
+    expect(tree!.nodes.filter((n) => n.tier === 3).length).toBe(1);
+    tree!.nodes.forEach((n) => {
+      expect(n.maxLevel).toBe(5);
+      expect(n.values.length).toBe(5);
+    });
+    // 机关枪天赋数值：攻击力/换弹逐级 ±10%，攻速逐级 +8%，穿透/子弹数量逐级 +1，暴击逐级 +10%
+    const byId = (id: string) => tree!.nodes.find((n) => n.id === id)!;
+    expect(byId('attack_damage').values).toEqual([10, 20, 30, 40, 50]);
+    expect(byId('attack_speed').values).toEqual([8, 16, 24, 32, 40]);
+    const reload = byId('reload_speed');
+    expect(reload.values).toEqual([10, 20, 30, 40, 50]);
+    expect(reload.decrease).toBe(true);
+    expect(byId('penetration').values).toEqual([1, 2, 3, 4, 5]);
+    expect(byId('crit_rate').values).toEqual([10, 20, 30, 40, 50]);
+    expect(byId('bullet_count').values).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('tier 2 unlocks at 5 tier-1 levels, tier 3 at 4 tier-2 levels', () => {
+    const tree = getTalentTree(WeaponTypeId.MachineGun)!;
+    const t2 = tree.nodes.find((n) => n.tier === 2)!;
+    const t3 = tree.nodes.find((n) => n.tier === 3)!;
+    const levels = { attack_damage: 3, attack_speed: 2, reload_speed: 0 };
+
+    expect(isNodeUnlocked(tree, levels, t2)).toBe(true); // 3+2 = 5
+    expect(isNodeUnlocked(tree, levels, t3)).toBe(false); // tier2 0 < 4
+
+    levels.penetration = 4;
+    expect(isNodeUnlocked(tree, levels, t3)).toBe(true); // tier2 = 4
+  });
+
+  it('applyTalentStats applies damage/attack speed/reload/penetration/crit/bullets', () => {
+    seedStore(
+      {
+        attack_damage: 2,   // +20%
+        attack_speed: 1,    // +8%
+        reload_speed: 2,    // 换弹时间 -20%
+        penetration: 3,     // +3
+        crit_rate: 2,       // 20%
+        bullet_count: 1,    // +1
+      },
+      0,
+    );
+    const char = createCharacter(WeaponTypeId.MachineGun);
+    applyTalentStats(char);
+    const base = WEAPON_CONFIGS[WeaponTypeId.MachineGun].baseStats;
+    expect(char.mainWeapon.stats.damage).toBeCloseTo(base.damage * 1.2);
+    expect(char.mainWeapon.stats.fireRate).toBeCloseTo(base.fireRate * 1.08);
+    expect(char.mainWeapon.stats.reloadSpeed).toBeCloseTo(base.reloadSpeed * 0.8);
+    expect(char.mainWeapon.stats.penetration).toBe(base.penetration + 3);
+    expect(char.mainWeapon.stats.bulletCount).toBe(base.bulletCount + 1);
+    expect(char.critChance).toBeCloseTo(0.2);
+  });
+
+  it('reload talent never touches melee characters (reloadSpeed stays 0)', () => {
+    seedStore({ reload_speed: 5 }, 0);
+    const char = createCharacter(WeaponTypeId.MeleeBlade);
+    applyTalentStats(char);
+    expect(char.mainWeapon.stats.reloadSpeed).toBe(0);
+  });
+
+  it('buildTalentTreeView shows -X% for decrease nodes and +X% elsewhere', () => {
+    seedStore({}, 10);
+    const view = buildTalentTreeView(WeaponTypeId.MachineGun)!;
+    expect(view.points).toBe(10);
+    expect(view.nodes.length).toBe(6);
+    const reload = view.nodes.find((n) => n.id === 'reload_speed')!;
+    expect(reload.curValue).toBe('未激活');
+    expect(reload.nextValue).toBe('-10%');
+    const damage = view.nodes.find((n) => n.id === 'attack_damage')!;
+    expect(damage.nextValue).toBe('+10%');
+
+    seedStore({ reload_speed: 2 }, 0);
+    const view2 = buildTalentTreeView(WeaponTypeId.MachineGun)!;
+    const reload2 = view2.nodes.find((n) => n.id === 'reload_speed')!;
+    expect(reload2.curValue).toBe('-20%');
+  });
+});
+
+describe('Talent tree (ElectricWave)', () => {
+  const seedStore = (levels: Record<string, number>, points = 10): void => {
+    localStorage.setItem('fireworld_talents', JSON.stringify({ electric_wave: { points, levels } }));
+  };
+
+  beforeEach(() => {
+    localStorage.removeItem('fireworld_talents');
+    localStorage.removeItem('fireworld_coins');
+  });
+
+  it('defines a 3/2/1-tier tree with 5 levels per talent', () => {
+    const tree = getTalentTree(WeaponTypeId.ElectricWave);
+    expect(tree).not.toBeNull();
+    expect(tree!.nodes.length).toBe(6);
+    expect(tree!.nodes.filter((n) => n.tier === 1).length).toBe(3);
+    expect(tree!.nodes.filter((n) => n.tier === 2).length).toBe(2);
+    expect(tree!.nodes.filter((n) => n.tier === 3).length).toBe(1);
+    const byId = (id: string) => tree!.nodes.find((n) => n.id === id)!;
+    expect(byId('attack_damage').values).toEqual([10, 20, 30, 40, 50]);
+    expect(byId('attack_speed').values).toEqual([8, 16, 24, 32, 40]);
+    const release = byId('release_time');
+    expect(release.values).toEqual([10, 20, 30, 40, 50]);
+    expect(release.decrease).toBe(true);
+    expect(byId('chain_count').values).toEqual([1, 2, 3, 4, 5]);
+    expect(byId('chain_range').values).toEqual([10, 20, 30, 40, 50]);
+    expect(byId('chain_growth').values).toEqual([10, 20, 30, 40, 50]);
+  });
+
+  it('applyTalentStats scales damage/fireRate/releaseTime/chainCount/chainRange/growth', () => {
+    seedStore(
+      {
+        attack_damage: 2,   // +20%
+        attack_speed: 1,    // +8%
+        release_time: 2,    // 释放时间 -20%
+        chain_count: 3,     // +3 跳
+        chain_range: 2,     // 连锁范围 +20%
+        chain_growth: 1,    // 逐跳 +10%
+      },
+      0,
+    );
+    const char = createCharacter(WeaponTypeId.ElectricWave);
+    applyTalentStats(char);
+    const base = WEAPON_CONFIGS[WeaponTypeId.ElectricWave].baseStats;
+    expect(char.mainWeapon.stats.damage).toBeCloseTo(base.damage * 1.2);
+    expect(char.mainWeapon.stats.fireRate).toBeCloseTo(base.fireRate * 1.08);
+    expect(char.mainWeapon.stats.releaseTime).toBeCloseTo(0.3 * 0.8);
+    expect(char.mainWeapon.stats.chainCount).toBe((base.chainCount ?? 0) + 3);
+    expect(char.mainWeapon.stats.chainRange).toBeCloseTo((base.chainRange ?? 120) * 1.2);
+    expect(char.mainWeapon.stats.chainGrowthPct).toBe(10);
+  });
+
+  it('buildTalentTreeView shows -X% for the release time node', () => {
+    seedStore({}, 10);
+    const view = buildTalentTreeView(WeaponTypeId.ElectricWave)!;
+    const release = view.nodes.find((n) => n.id === 'release_time')!;
+    expect(release.nextValue).toBe('-10%');
+    seedStore({ release_time: 3 }, 0);
+    const view2 = buildTalentTreeView(WeaponTypeId.ElectricWave)!;
+    expect(view2.nodes.find((n) => n.id === 'release_time')!.curValue).toBe('-30%');
   });
 });

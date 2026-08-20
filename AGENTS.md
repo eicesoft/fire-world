@@ -38,7 +38,7 @@ Character, Enemy, Mini-boss, Main Weapon, Auxiliary Weapon, XP, Level-Up, Upgrad
 
 ## Key Types
 - `Character` has `mainWeapon: Weapon` + `auxWeapons: AuxiliaryWeapon[]` (max 2)
-- `Weapon` — MachineGun/Shotgun/MeleeBlade/Flamethrower/LaserGun/Bow
+- `Weapon` — MachineGun/ElectricWave/MeleeBlade/Flamethrower/LaserGun
 - `AuxiliaryWeapon` — Missile/WindWheel/LaserGun/SwordEnergy/Turret/LandMine
 - `GameState` holds all entities, effects, phase, selectedIndex
 - `UpgradeOption` has `target` (main_weapon|aux_weapon|acquire_aux) + `rarity` (Common/Rare/Epic/Legendary)

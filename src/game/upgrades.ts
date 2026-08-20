@@ -18,6 +18,7 @@ import { createAuxiliaryWeapon } from './character';
 
 const MAIN_WEAPON_DELTAS: Partial<Record<keyof WeaponStats, number>> = {
   damage: 5, fireRate: 1, magazineCapacity: 5, reloadSpeed: -0.2, penetration: 1, bulletCount: 1, range: 10,
+  chainCount: 1, chainRange: 30,
 };
 
 const AUX_WEAPON_DELTAS: Partial<Record<keyof AuxiliaryWeaponStats, number>> = {
@@ -32,6 +33,8 @@ const MAIN_STAT_DESCRIPTIONS: Record<string, (delta: number) => string> = {
   penetration: (d) => `${d > 0 ? '+' : ''}${d} 穿透`,
   bulletCount: (d) => `${d > 0 ? '+' : ''}${d} 子弹数量`,
   range: (d) => `${d > 0 ? '+' : ''}${d} 范围`,
+  chainCount: (d) => `${d > 0 ? '+' : ''}${d} 连锁次数`,
+  chainRange: (d) => `${d > 0 ? '+' : ''}${d} 连锁范围`,
 };
 
 const AUX_STAT_DESCRIPTIONS: Record<string, (delta: number) => string> = {
@@ -59,6 +62,10 @@ function rollRarity(): Rarity {
 
 function getMainUpgradeableStats(typeId: WeaponTypeId): (keyof WeaponStats)[] {
   const config = WEAPON_CONFIGS[typeId];
+  // 电波枪专属升级池：攻速 / 攻击力 / 连锁次数 / 连锁范围
+  if (typeId === WeaponTypeId.ElectricWave) {
+    return ['fireRate', 'damage', 'chainCount', 'chainRange'];
+  }
   const stats = ['damage', 'fireRate', 'range'] as (keyof WeaponStats)[];
   if (config.isMelee) return stats;
   stats.push('penetration', 'magazineCapacity', 'reloadSpeed', 'bulletCount');

@@ -204,10 +204,9 @@ interface ShakeFx {
 
 const PROJECTILE_COLORS: Record<string, number> = {
   [WeaponTypeId.MachineGun]: 0xffeb3b,
-  [WeaponTypeId.Shotgun]: 0xff9800,
+  [WeaponTypeId.ElectricWave]: 0xb388ff,
   [WeaponTypeId.Flamethrower]: 0xff6d00,
   [WeaponTypeId.LaserGun]: 0x00e5ff,
-  [WeaponTypeId.Bow]: 0x8bc34a,
   missile: 0xff7043,
   aux_laser_gun: 0x00e5ff,
   sword_energy: 0x9fffff,
@@ -216,10 +215,9 @@ const PROJECTILE_COLORS: Record<string, number> = {
 
 const PROJECTILE_RADIUS: Record<string, number> = {
   [WeaponTypeId.MachineGun]: 3,
-  [WeaponTypeId.Shotgun]: 4,
+  [WeaponTypeId.ElectricWave]: 3,
   [WeaponTypeId.Flamethrower]: 9,
   [WeaponTypeId.LaserGun]: 3,
-  [WeaponTypeId.Bow]: 4.5,
   missile: 6,
   aux_laser_gun: 3,
   sword_energy: 6,
@@ -671,6 +669,7 @@ export class PixiRenderer {
   private readonly landMines = new Map<string, { gfx: Graphics; armed: boolean; radius: number }>();
   private readonly slashes = new Map<string, SlashGfx>();
   private readonly beams = new Map<string, Graphics>();
+  private prevBeamKeys = new Set<string>();
   private readonly damages = new Map<string, Text>();
   private readonly projectiles = new Map<string, Particle>();
   private readonly blades = new Map<string, Graphics>();
@@ -1204,18 +1203,53 @@ export class PixiRenderer {
     for (const ef of effects) {
       const key = `${ef.origin.x.toFixed(1)},${ef.origin.y.toFixed(1)},${ef.end.x.toFixed(1)},${ef.end.y.toFixed(1)}`;
       seen.add(key);
+      const colorNum = /^#([0-9a-f]{6})$/i.test(ef.color)
+        ? parseInt(ef.color.slice(1), 16)
+        : 0x00e5ff;
       let g = this.beams.get(key);
+      const isNew = !g;
       if (!g) {
         g = new Graphics();
-        g.moveTo(ef.origin.x, ef.origin.y).lineTo(ef.end.x, ef.end.y).stroke({ color: 0x00e5ff, width: ef.width });
-        g.moveTo(ef.origin.x, ef.origin.y).lineTo(ef.end.x, ef.end.y).stroke({
-          color: 0xc8ffff,
-          width: Math.max(2, ef.width * 0.4),
+        // 折线闪电：沿直线方向做若干次随机垂直抖动（创建时固定，存续期间稳定）
+        const dx = ef.end.x - ef.origin.x;
+        const dy = ef.end.y - ef.origin.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = -dy / len;
+        const ny = dx / len;
+        const segs = 5;
+        const pts: number[] = [];
+        for (let s = 0; s <= segs; s++) {
+          const t = s / segs;
+          const perp = s === 0 || s === segs ? 0 : (Math.random() - 0.5) * 10;
+          pts.push(ef.origin.x + dx * t + nx * perp, ef.origin.y + dy * t + ny * perp);
+        }
+        // 外圈辉光（宽、半透明）
+        g.moveTo(pts[0], pts[1]);
+        for (let s = 1; s <= segs; s++) g.lineTo(pts[s * 2], pts[s * 2 + 1]);
+        g.stroke({ color: colorNum, width: ef.width * 2.2, alpha: 0.35 });
+        // 主体
+        g.moveTo(pts[0], pts[1]);
+        for (let s = 1; s <= segs; s++) g.lineTo(pts[s * 2], pts[s * 2 + 1]);
+        g.stroke({ color: colorNum, width: ef.width });
+        // 亮核
+        g.moveTo(pts[0], pts[1]);
+        for (let s = 1; s <= segs; s++) g.lineTo(pts[s * 2], pts[s * 2 + 1]);
+        g.stroke({
+          color: 0xffffff, width: Math.max(2, ef.width * 0.35),
         });
         this.beams.set(key, g);
         this.beamC.addChild(g);
       }
-      g.alpha = clamp01(ef.timer / 0.15);
+      g.alpha = clamp01(ef.timer / 0.25);
+      // 新电弧 → 两端迸放电火花，让连锁肉眼可见
+      if (isNew && !this.prevBeamKeys.has(key)) {
+        const spark = { x: ef.end.x, y: ef.end.y };
+        this.fx.burst({
+          count: 8, x: spark.x, y: spark.y, color: colorNum, angle: Math.random() * Math.PI * 2,
+          spread: Math.PI * 2, speedMin: 50, speedMax: 200, sizeMin: 1.5, sizeMax: 4,
+          lifeMin: 0.15, lifeMax: 0.45, drag: 0.9, additive: true,
+        });
+      }
     }
     for (const [key, g] of this.beams) {
       if (!seen.has(key)) {
@@ -1224,6 +1258,7 @@ export class PixiRenderer {
         this.beams.delete(key);
       }
     }
+    this.prevBeamKeys = seen;
   }
 
   private syncWindWheels(state: GameState): void {
@@ -1565,14 +1600,13 @@ export class PixiRenderer {
       if (!this.prevProjectiles.has(proj.id) && muzzleCount < 10) {
         const wt = proj.weaponType as string;
         const color = PROJECTILE_COLORS[wt] ?? 0xffffff;
-        const isShotgun = wt === WeaponTypeId.Shotgun;
         const isFlame = wt === WeaponTypeId.Flamethrower;
-        const count = isShotgun ? 10 : isFlame ? 6 : 4;
+        const count = isFlame ? 6 : 4;
         const angle = Math.atan2(proj.velocity.y, proj.velocity.x);
         this.fx.burst({
           x: proj.position.x, y: proj.position.y, count,
           color, angle, spread: 1.4,
-          speedMin: 60, speedMax: isShotgun ? 240 : 160,
+          speedMin: 60, speedMax: 160,
           sizeMin: 2, sizeMax: 4,
           lifeMin: 0.12, lifeMax: 0.3,
           drag: 0.92, additive: true,
@@ -2113,13 +2147,20 @@ export class PixiRenderer {
       name.position.set(x + boxWidth / 2, startY + 30);
       c.addChild(name);
 
-      const stats = [
-        `伤害: ${config.baseStats.damage}`,
-        `攻速: ${config.baseStats.fireRate}`,
-        `弹匣: ${config.baseStats.magazineCapacity === Infinity ? '∞' : config.baseStats.magazineCapacity}`,
-        `换弹: ${config.baseStats.reloadSpeed}秒`,
-        `范围: ${config.baseStats.range}`,
-      ];
+      const stats: string[] = [];
+      if (config.baseStats.magazineCapacity !== Infinity) {
+        stats.push(`弹匣: ${config.baseStats.magazineCapacity}`);
+      }
+      if (config.baseStats.reloadSpeed > 0) {
+        stats.push(`换弹: ${config.baseStats.reloadSpeed}秒`);
+      }
+      stats.push(`伤害: ${config.baseStats.damage}`);
+      stats.push(`攻速: ${config.baseStats.fireRate}`);
+      stats.push(`范围: ${config.baseStats.range}`);
+      if (config.baseStats.chainCount !== undefined) {
+        stats.push(`连锁: ${config.baseStats.chainCount}次`);
+        stats.push(`连锁范围: ${config.baseStats.chainRange}`);
+      }
       stats.forEach((sLine, idx) => {
         const t = makeText(sLine, { ...FONT_11, fill: 0xaaaaaa }, 0, 0.5);
         t.position.set(x + 10, startY + 55 + idx * 16);
@@ -2471,12 +2512,20 @@ export class PixiRenderer {
       c.addChild(lv);
       y += 28;
 
-      const ammoStr = w.stats.magazineCapacity === Infinity ? '∞' : `${Math.floor(w.currentAmmo)}/${w.stats.magazineCapacity}`;
-      drawStat('弹药', ammoStr, isMelee ? 0xaaaaaa : 0xffeb3b);
+      const isElectric = w.typeId === WeaponTypeId.ElectricWave;
+      if (!isElectric) {
+        const ammoStr = w.stats.magazineCapacity === Infinity ? '∞' : `${Math.floor(w.currentAmmo)}/${w.stats.magazineCapacity}`;
+        drawStat('弹药', ammoStr, isMelee ? 0xaaaaaa : 0xffeb3b);
+      }
       drawStat('伤害', `${w.stats.damage}`, 0xef5350);
       drawStat('攻速', `${w.stats.fireRate}`, 0xab47bc);
       drawStat('范围', `${w.stats.range}`, 0x26c6da);
-      drawStat('换弹', isMelee ? '-' : `${w.stats.reloadSpeed.toFixed(1)}s`, isMelee ? 0xaaaaaa : 0xff9800);
+      if (!isElectric) {
+        drawStat('换弹', isMelee ? '-' : `${w.stats.reloadSpeed.toFixed(1)}s`, isMelee ? 0xaaaaaa : 0xff9800);
+      } else {
+        drawStat('连锁', `${w.stats.chainCount}次`, 0xb388ff);
+        drawStat('连锁范围', `${w.stats.chainRange}`, 0xb388ff);
+      }
       y += 8;
     };
 

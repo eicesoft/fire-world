@@ -1,6 +1,6 @@
 import { GameState, GamePhase, WeaponTypeId, SCREEN_WIDTH, SCREEN_HEIGHT, INITIAL_WEAPON_POOL, PAUSE_EXIT_BTN, NEXT_STAGE_BTN, TALENT_BTN, TALENT_BACK_BTN } from './game/types';
-import { createInitialGameState, updateGame, selectWeapon, handleLevelUpSelect, handleWeaponDropSelect, startNextStage, updateLevelComplete, exitToMainMenu } from './game/gameLoop';
-import { buildTalentTreeView, syncTalentState, spendTalentPoint } from './game/talents';
+import { createInitialGameState, updateGame, selectWeapon, handleLevelUpSelect, handleWeaponDropSelect, startNextStage, updateLevelComplete, exitToMainMenu, lastElectricChainHits } from './game/gameLoop';
+import { buildTalentTreeView, syncTalentState, spendTalentPoint, addTalentPoints } from './game/talents';
 import { findTalentNodeAt } from './ui/talentLayout';
 import { PixiRenderer } from './rendering/pixiRenderer';
 import { InputState, createInputState, setupInputHandlers, getMovementDirection, updateMouseDirection, pollGamepad } from './systems/input';
@@ -41,6 +41,18 @@ if (import.meta.env.DEV) {
     input: () => input,
     renderer,
     stage: () => (renderer as unknown as { app: { stage: unknown } }).app.stage,
+    /** 给指定武器角色增加天赋点（持久化到 localStorage），返回当前可用点 */
+    grantTalents: (weaponType: string, amount: number) => {
+      const points = addTalentPoints(weaponType as WeaponTypeId, amount);
+      syncTalentState(gameState);
+      // 天赋树已打开时重建视图，刷新剩余点数显示
+      if (gameState.inTalentTree && gameState.talentTreeView) {
+        gameState.talentTreeView = buildTalentTreeView(gameState.talentTreeView.weaponType);
+      }
+      return points;
+    },
+    /** 最近一次电波枪开火的连锁命中数（>1 表示连锁生效） */
+    electricChainHits: () => lastElectricChainHits,
   };
 }
 const input = createInputState();

@@ -5,11 +5,10 @@ export interface Vector2 {
 
 export enum WeaponTypeId {
   MachineGun = 'machine_gun',
-  Shotgun = 'shotgun',
+  ElectricWave = 'electric_wave',
   MeleeBlade = 'melee_blade',
   Flamethrower = 'flamethrower',
   LaserGun = 'laser_gun',
-  Bow = 'bow',
 }
 
 export interface WeaponStats {
@@ -20,6 +19,14 @@ export interface WeaponStats {
   penetration: number;
   bulletCount: number;
   range: number;
+  /** 电波枪：单次释放时长（秒），配置后作为射击间隔下限（与 1/fireRate 取大） */
+  releaseTime?: number;
+  /** 电波枪：额外连锁跳数（首目标之后继续跳跃的次数） */
+  chainCount?: number;
+  /** 电波枪：连锁跳跃半径 */
+  chainRange?: number;
+  /** 电波枪：连锁伤害逐次提高 %（第 j 跳伤害 = 基础 × (1 + j·growth%)） */
+  chainGrowthPct?: number;
 }
 
 export interface WeaponConfig {
@@ -235,6 +242,13 @@ export enum TalentNodeId {
   AttackRange = 'attack_range',
   CritRate = 'crit_rate',
   DoubleStrike = 'double_strike',
+  ReloadSpeed = 'reload_speed',
+  Penetration = 'penetration',
+  BulletCount = 'bullet_count',
+  ReleaseTime = 'release_time',
+  ChainCount = 'chain_count',
+  ChainRange = 'chain_range',
+  ChainGrowth = 'chain_growth',
 }
 
 export interface TalentNodeDef {
@@ -248,6 +262,8 @@ export interface TalentNodeDef {
   values: number[];
   /** 数值单位（如 '%'），空字符串表示无单位 */
   unit: string;
+  /** 效果为减益方向（如缩短换弹时间），界面以 -X 显示，属性应用时反向计算 */
+  decrease?: boolean;
 }
 
 export interface TalentTreeDef {
@@ -397,6 +413,10 @@ export const MAX_AUX_SLOTS = 2;
 
 /** 每关时长（秒） */
 export const STAGE_DURATION = 600;
+/** 怪物基础血量统一缩放（+20%） */
+export const ENEMY_HP_BASE_MULT = 1.2;
+/** 每过 1 分钟，怪物血量提高 25%（按已过分钟数乘方叠加） */
+export const ENEMY_HP_MINUTE_GROWTH = 1.25;
 /** 结算公式：击杀数 × 关卡等级 × 该系数 */
 export const COINS_PER_KILL = 100;
 /** 关卡结算后自动进入下一关的倒计时（秒） */
@@ -431,11 +451,10 @@ export interface WeaponCharacterPreset {
 
 export const WEAPON_CHARACTER_PRESETS: Record<WeaponTypeId, WeaponCharacterPreset> = {
   [WeaponTypeId.MachineGun]: { speedMultiplier: 1, health: 100 },
-  [WeaponTypeId.Shotgun]: { speedMultiplier: 0.8, health: 130 },
+  [WeaponTypeId.ElectricWave]: { speedMultiplier: 0.8, health: 130 },
   [WeaponTypeId.MeleeBlade]: { speedMultiplier: 1.4, health: 90 },
   [WeaponTypeId.Flamethrower]: { speedMultiplier: 0.75, health: 120 },
   [WeaponTypeId.LaserGun]: { speedMultiplier: 1, health: 100 },
-  [WeaponTypeId.Bow]: { speedMultiplier: 1.25, health: 80 },
 };
 
 export const WEAPON_CONFIGS: Record<WeaponTypeId, WeaponConfig> = {
@@ -444,9 +463,9 @@ export const WEAPON_CONFIGS: Record<WeaponTypeId, WeaponConfig> = {
     baseStats: { damage: 10, fireRate: 8, magazineCapacity: 30, reloadSpeed: 2.5, penetration: 1, bulletCount: 1, range: 150 },
     isMelee: false,
   },
-  [WeaponTypeId.Shotgun]: {
-    id: WeaponTypeId.Shotgun, name: '散弹枪',
-    baseStats: { damage: 7, fireRate: 1.2, magazineCapacity: 6, reloadSpeed: 1.5, penetration: 1, bulletCount: 5, range: 100 },
+  [WeaponTypeId.ElectricWave]: {
+    id: WeaponTypeId.ElectricWave, name: '电波枪',
+    baseStats: { damage: 12, fireRate: 3.5, magazineCapacity: Infinity, reloadSpeed: 0, penetration: 0, bulletCount: 0, range: 260, releaseTime: 0.3, chainCount: 3, chainRange: 300 },
     isMelee: false,
   },
   [WeaponTypeId.MeleeBlade]: {
@@ -462,11 +481,6 @@ export const WEAPON_CONFIGS: Record<WeaponTypeId, WeaponConfig> = {
   [WeaponTypeId.LaserGun]: {
     id: WeaponTypeId.LaserGun, name: '激光枪',
     baseStats: { damage: 15, fireRate: 3, magazineCapacity: 20, reloadSpeed: 1.8, penetration: 5, bulletCount: 1, range: 200 },
-    isMelee: false,
-  },
-  [WeaponTypeId.Bow]: {
-    id: WeaponTypeId.Bow, name: '弓箭',
-    baseStats: { damage: 20, fireRate: 1.5, magazineCapacity: 1, reloadSpeed: 0.4, penetration: 3, bulletCount: 3, range: 175 },
     isMelee: false,
   },
 };
@@ -505,13 +519,13 @@ export const AUXILIARY_WEAPON_CONFIGS: Record<AuxiliaryWeaponType, AuxiliaryWeap
 };
 
 export const INITIAL_WEAPON_POOL: WeaponTypeId[] = [
-  WeaponTypeId.MachineGun, WeaponTypeId.Shotgun, WeaponTypeId.MeleeBlade,
-  WeaponTypeId.Flamethrower, WeaponTypeId.Bow,
+  WeaponTypeId.MachineGun, WeaponTypeId.ElectricWave, WeaponTypeId.MeleeBlade,
+  WeaponTypeId.Flamethrower,
 ];
 
 export const ALL_WEAPON_TYPES: WeaponTypeId[] = [
-  WeaponTypeId.MachineGun, WeaponTypeId.Shotgun, WeaponTypeId.MeleeBlade,
-  WeaponTypeId.Flamethrower, WeaponTypeId.LaserGun, WeaponTypeId.Bow,
+  WeaponTypeId.MachineGun, WeaponTypeId.ElectricWave, WeaponTypeId.MeleeBlade,
+  WeaponTypeId.Flamethrower, WeaponTypeId.LaserGun,
 ];
 
 export const ALL_AUXILIARY_TYPES: AuxiliaryWeaponType[] = [

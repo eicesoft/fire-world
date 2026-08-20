@@ -24,24 +24,25 @@ Fireworld 是一款**俯视角生存游戏**：角色在一张固定大地图（
 
 ### 2.1 武器系统
 
-**主武器（`Main Weapon`）**——开局从 5 选 1，定义见 `types.ts` 的 `WeaponTypeId` 与 `WEAPON_CONFIGS`：
+**主武器（`Main Weapon`）**——开局从 4 选 1，定义见 `types.ts` 的 `WeaponTypeId` 与 `WEAPON_CONFIGS`：
 
 | 武器类型 | 名称 | 特点 |
 |---|---|---|
 | `MachineGun` | 机关枪 | 高射速、低伤、可穿透 1 |
-| `Shotgun` | 散弹枪 | 一次 5 发、近距 |
+| `ElectricWave` | 电波枪 | 单目标命中 + 连锁电击、无弹药限制 |
 | `MeleeBlade` | 近战刀 | 近战扇形、高伤、无限弹药/穿透 |
 | `Flamethrower` | 火焰喷射器 | 短射程、附带**灼烧** DoT 伤害 |
 | `LaserGun` | 激光枪 | 远射程、高穿透（5） |
-| `Bow` | 弓箭 | 1 弹匣 3 发、穿透 3 |
 
-> 平衡说明：所有武器的 `range`（含升级增量）已统一减半。主武器基础射程为 150/100/45/75/200/175（机枪/散弹/近战/喷火/激光/弓），近战刀的攻击弧也从 90° 扩至 135°（攻击范围+触发范围各 +50%）；辅助武器为 150/40/125/100/100（导弹/飞轮/激光/剑气/炮台）；`range` 升级幅度由 +20 改为 +10。
+> 平衡说明：所有武器的 `range`（含升级增量）已统一减半。主武器基础射程为 150/260/45/75/200（机枪/电波/近战/喷火/激光），近战刀的攻击弧也从 90° 扩至 135°（攻击范围+触发范围各 +50%）；辅助武器为 150/40/125/100/100（导弹/飞轮/激光/剑气/炮台）；`range` 升级幅度由 +20 改为 +10。
 
-> 不同主武器赋予角色不同初始属性（`WEAPON_CHARACTER_PRESETS`）：机关枪 移速×1（200）/血量 100；散弹枪 ×0.8（160）/130；近战刀 ×1.4（280）/90；火焰喷射器 ×0.75（150）/120；弓箭 ×1.25（250）/80。
+> 电波枪无弹匣/无弹丸：`magazineCapacity` Infinity 且 `bulletCount` 0，升级池只有 攻速/伤害/连锁次数/连锁范围。攻击间隔 = 释放时间（基础 0.3s）× 基础攻速 ÷ 当前攻速（攻速与「释放时间缩短」天赋共同生效）；初始连锁弹射 3 次（`chainCount` 基础 3，额外跳数）、连锁半径 `chainRange`（基础 250）、连锁从「人群最密集处」起跳、连锁伤害逐次提高 `chainGrowthPct`（天赋）。
 
-> `LaserGun` 已配置为武器类型，但**不在初始 5 选 1 池内**（`INITIAL_WEAPON_POOL` 不含它），目前仅作为数据存在。
+> 不同主武器赋予角色不同初始属性（`WEAPON_CHARACTER_PRESETS`）：机关枪 移速×1（200）/血量 100；电波枪 ×0.8（160）/130；近战刀 ×1.4（280）/90；火焰喷射器 ×0.75（150）/120。
 
-武器共有 7 个 `WeaponStat`：`damage / fireRate / magazineCapacity / reloadSpeed / penetration / bulletCount / range`。近战刀用 `isMelee + attackArc` 走扇形判定而非弹丸。
+> `LaserGun` 已配置为武器类型，但**不在初始 4 选 1 池内**（`INITIAL_WEAPON_POOL` 不含它），目前仅作为数据存在。
+
+武器共有 7 个基础 `WeaponStat`：`damage / fireRate / magazineCapacity / reloadSpeed / penetration / bulletCount / range`，电波枪额外使用可选字段 `releaseTime / chainCount / chainRange / chainGrowthPct`。近战刀用 `isMelee + attackArc` 走扇形判定而非弹丸。
 
 **辅助武器（`Auxiliary Weapon`）**——击败 Mini-boss 掉落获取，最多 2 把，定义见 `AuxiliaryWeaponType` 与 `AUXILIARY_WEAPON_CONFIGS`：
 
@@ -91,7 +92,7 @@ Fireworld 是一款**俯视角生存游戏**：角色在一张固定大地图（
 
 | 阶段 | 含义 |
 |---|---|
-| `WeaponSelect` | 开局 5 选 1 主武器 |
+| `WeaponSelect` | 开局 4 选 1 主武器 |
 | `Playing` | 正常游玩（主循环仅在此阶段推进逻辑） |
 | `Paused` | 暂停，侧栏显示角色/武器详细属性（ESC 切换） |
 | `LevelUp` | 升级三选一 |

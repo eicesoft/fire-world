@@ -77,10 +77,11 @@ export function normalize(v: Vector2): Vector2 {
   return { x: v.x / len, y: v.y / len };
 }
 
-export function findNearestEnemy(pos: Vector2, enemies: Enemy[], maxRange: number): Enemy | null {
+export function findNearestEnemy(pos: Vector2, enemies: Enemy[], maxRange: number, exclude?: Set<string>): Enemy | null {
   let nearest: Enemy | null = null;
   let nearestDist = maxRange;
   for (const enemy of enemies) {
+    if (exclude?.has(enemy.id)) continue;
     const d = distance(pos, enemy.position);
     if (d < nearestDist) {
       nearestDist = d;

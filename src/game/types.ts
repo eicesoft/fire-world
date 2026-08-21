@@ -101,6 +101,12 @@ export interface Character {
   invincibleTimer: number;
   critChance: number;
   doubleStrikeChance: number;
+  /** 火焰喷射器天赋：燃烧伤害加成 % */
+  burnDamageBonus: number;
+  /** 火焰喷射器天赋：燃烧持续时间加成 % */
+  burnDurationBonus: number;
+  /** 火焰喷射器天赋：燃烧叠加层数上限 */
+  burnStackCap: number;
 }
 
 export interface EnemyConfig {
@@ -127,6 +133,7 @@ export interface Enemy {
   attackCooldown: number;
   burnDamage: number;
   burnTimer: number;
+  burnStack: number;
 }
 
 export interface Projectile {
@@ -249,6 +256,14 @@ export enum TalentNodeId {
   ChainCount = 'chain_count',
   ChainRange = 'chain_range',
   ChainGrowth = 'chain_growth',
+  /** 火焰喷射器：燃烧伤害 */
+  BurnDamage = 'burn_damage',
+  /** 火焰喷射器：燃烧持续时间 */
+  BurnDuration = 'burn_duration',
+  /** 火焰喷射器：火焰范围 */
+  FlameRange = 'flame_range',
+  /** 火焰喷射器：燃烧支持叠加 */
+  BurnStack = 'burn_stack',
 }
 
 export interface TalentNodeDef {
@@ -465,7 +480,7 @@ export const WEAPON_CONFIGS: Record<WeaponTypeId, WeaponConfig> = {
   },
   [WeaponTypeId.ElectricWave]: {
     id: WeaponTypeId.ElectricWave, name: '电波枪',
-    baseStats: { damage: 12, fireRate: 3.5, magazineCapacity: Infinity, reloadSpeed: 0, penetration: 0, bulletCount: 0, range: 260, releaseTime: 0.3, chainCount: 3, chainRange: 300 },
+    baseStats: { damage: 8, fireRate: 3.5, magazineCapacity: Infinity, reloadSpeed: 0, penetration: 0, bulletCount: 0, range: 260, releaseTime: 0.3, chainCount: 1, chainRange: 50 },
     isMelee: false,
   },
   [WeaponTypeId.MeleeBlade]: {
@@ -488,7 +503,7 @@ export const WEAPON_CONFIGS: Record<WeaponTypeId, WeaponConfig> = {
 export const AUXILIARY_WEAPON_CONFIGS: Record<AuxiliaryWeaponType, AuxiliaryWeaponConfig> = {
   [AuxiliaryWeaponType.Missile]: {
     id: AuxiliaryWeaponType.Missile, name: '导弹',
-    baseStats: { damage: 30, range: 350, cooldown: 0, count: 1, explosionRadius: 55, rotationSpeed: 0, duration: 0, placementCooldown: 2, turretFireRate: 0, armTime: 0 },
+    baseStats: { damage: 30, range: 350, cooldown: 0, count: 1, explosionRadius: 110, rotationSpeed: 0, duration: 0, placementCooldown: 2, turretFireRate: 0, armTime: 0 },
     maxCount: 1,
   },
   [AuxiliaryWeaponType.WindWheel]: {
@@ -508,7 +523,7 @@ export const AUXILIARY_WEAPON_CONFIGS: Record<AuxiliaryWeaponType, AuxiliaryWeap
   },
   [AuxiliaryWeaponType.Turret]: {
     id: AuxiliaryWeaponType.Turret, name: '炮台',
-    baseStats: { damage: 24, range: 220, cooldown: 0, count: 2, explosionRadius: 45, rotationSpeed: 0, duration: 20, placementCooldown: 0.6, turretFireRate: 3, armTime: 0 },
+    baseStats: { damage: 24, range: 220, cooldown: 0, count: 2, explosionRadius: 45, rotationSpeed: 0, duration: 20, placementCooldown: 0.6, turretFireRate: 0.5, armTime: 0 },
     maxCount: 3,
   },
   [AuxiliaryWeaponType.LandMine]: {

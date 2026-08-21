@@ -18,7 +18,7 @@ import { createAuxiliaryWeapon } from './character';
 
 const MAIN_WEAPON_DELTAS: Partial<Record<keyof WeaponStats, number>> = {
   damage: 5, fireRate: 1, magazineCapacity: 5, reloadSpeed: -0.2, penetration: 1, bulletCount: 1, range: 10,
-  chainCount: 1, chainRange: 30,
+  chainRange: 30,
 };
 
 const AUX_WEAPON_DELTAS: Partial<Record<keyof AuxiliaryWeaponStats, number>> = {
@@ -64,7 +64,10 @@ function getMainUpgradeableStats(typeId: WeaponTypeId): (keyof WeaponStats)[] {
   const config = WEAPON_CONFIGS[typeId];
   // 电波枪专属升级池：攻速 / 攻击力 / 连锁次数 / 连锁范围
   if (typeId === WeaponTypeId.ElectricWave) {
-    return ['fireRate', 'damage', 'chainCount', 'chainRange'];
+    const stats = ['fireRate', 'damage', 'chainRange'] as (keyof WeaponStats)[];
+    // 连锁次数 30% 概率进入升级池
+    if (Math.random() < 0.3) stats.push('chainCount');
+    return stats;
   }
   const stats = ['damage', 'fireRate', 'range'] as (keyof WeaponStats)[];
   if (config.isMelee) return stats;
@@ -107,6 +110,19 @@ function generateMainWeaponUpgradeOptions(typeId: WeaponTypeId): UpgradeOption[]
   const shuffled = stats.sort(() => Math.random() - 0.5);
   const count = Math.min(2, shuffled.length);
   return shuffled.slice(0, count).map((stat) => {
+    // 连锁次数只出特殊(紫)/传说(金)，特殊+1、传说+2
+    if (stat === 'chainCount') {
+      const rarity = Math.random() < 0.5 ? Rarity.Epic : Rarity.Legendary;
+      const delta = rarity === Rarity.Epic ? 1 : 2;
+      return {
+        target: 'main_weapon',
+        weaponTypeId: typeId,
+        stat,
+        statDelta: delta,
+        description: `[${RARITY_NAMES[rarity]}] ${WEAPON_CONFIGS[typeId].name} ${MAIN_STAT_DESCRIPTIONS[stat]?.(delta) ?? ''}`,
+        rarity,
+      };
+    }
     const rarity = rollRarity();
     const multiplier = RARITY_MULTIPLIERS[rarity];
     const baseDelta = MAIN_WEAPON_DELTAS[stat] ?? 0;
@@ -212,6 +228,8 @@ export function applyUpgrade(character: Character, option: UpgradeOption): void 
       weapon.level++;
       const current = (weapon.stats as any)[option.stat] as number;
       (weapon.stats as any)[option.stat] = Math.max(0.3, current + option.statDelta);
+      // 电波枪连锁次数上限 8
+      if (option.stat === 'chainCount') weapon.stats.chainCount = Math.min(8, weapon.stats.chainCount ?? 0);
       if (option.stat === 'magazineCapacity') {
         weapon.currentAmmo = weapon.stats.magazineCapacity;
       }

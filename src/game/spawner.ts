@@ -101,6 +101,7 @@ export function spawnEnemyWave(
       attackCooldown: 0,
       burnDamage: 0,
       burnTimer: 0,
+      burnStack: 0,
     });
   }
   return enemies;
@@ -124,6 +125,7 @@ export function spawnMiniBoss(characterPos: Vector2, level: number, stageLevel: 
     attackCooldown: 0,
     burnDamage: 0,
     burnTimer: 0,
+    burnStack: 0,
   };
 }
 

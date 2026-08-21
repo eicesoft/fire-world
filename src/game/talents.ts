@@ -216,7 +216,68 @@ export const TALENT_TREES: Record<WeaponTypeId, TalentTreeDef | null> = {
     ],
   },
   // 其余武器暂无天赋树
-  [WeaponTypeId.Flamethrower]: null,
+  [WeaponTypeId.Flamethrower]: {
+    weaponType: WeaponTypeId.Flamethrower,
+    nodes: [
+      // ── 1 阶（3 个）────────────────────────────────────────────
+      {
+        id: TalentNodeId.BurnDamage,
+        name: '烈焰灼烧',
+        desc: '燃烧伤害',
+        tier: 1,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [20, 40, 60, 80, 100],
+        unit: '%',
+      },
+      {
+        id: TalentNodeId.BurnDuration,
+        name: '余烬不灭',
+        desc: '燃烧持续时间',
+        tier: 1,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [20, 40, 60, 80, 100],
+        unit: '%',
+      },
+      {
+        id: TalentNodeId.FlameRange,
+        name: '火龙吐息',
+        desc: '火焰范围',
+        tier: 1,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [8, 16, 24, 32, 40],
+        unit: '%',
+      },
+      // ── 2 阶（2 个）────────────────────────────────────────────
+      {
+        id: TalentNodeId.Penetration,
+        name: '穿透烈焰',
+        desc: '穿透（一道火焰可命中多个敌人）',
+        tier: 2,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [1, 2, 3, 4, 5],
+        unit: '',
+      },
+      {
+        id: TalentNodeId.BulletCount,
+        name: '火舌乱舞',
+        desc: '每次射击火焰数量',
+        tier: 2,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [1, 2, 3, 4, 5],
+        unit: '',
+      },
+      // ── 3 阶（1 个）────────────────────────────────────────────
+      {
+        id: TalentNodeId.BurnStack,
+        name: '星火燎原',
+        desc: '燃烧伤害可叠加（多次命中叠加燃烧伤害）',
+        tier: 3,
+        maxLevel: TALENT_MAX_LEVEL,
+        values: [1, 2, 3, 4, 5],
+        unit: '',
+      },
+    ],
+  },
   [WeaponTypeId.LaserGun]: null,
 };
 
@@ -397,6 +458,10 @@ export function applyTalentStats(char: Character): void {
   const chainFlat = levelOf(tree, levels, TalentNodeId.ChainCount);
   const chainRangePct = levelOf(tree, levels, TalentNodeId.ChainRange);
   const chainGrowthPct = levelOf(tree, levels, TalentNodeId.ChainGrowth);
+  const burnDmgPct = levelOf(tree, levels, TalentNodeId.BurnDamage);
+  const burnDurPct = levelOf(tree, levels, TalentNodeId.BurnDuration);
+  const flameRangePct = levelOf(tree, levels, TalentNodeId.FlameRange);
+  const burnStackFlat = levelOf(tree, levels, TalentNodeId.BurnStack);
 
   const preset = WEAPON_CHARACTER_PRESETS[char.mainWeapon.typeId] ?? { speedMultiplier: 1, health: BASE_MAX_HEALTH };
   char.speed = BASE_SPEED * preset.speedMultiplier * (1 + speedPct / 100);
@@ -428,6 +493,20 @@ export function applyTalentStats(char: Character): void {
   }
   if (chainGrowthPct > 0) {
     weapon.stats.chainGrowthPct = chainGrowthPct;
+  }
+  // 火焰喷射器专属
+  if (burnDmgPct > 0) {
+    // 燃烧伤害提升由 gameLoop 中引用 char 的天赋值计算，此处标记
+    char.burnDamageBonus = burnDmgPct;
+  }
+  if (burnDurPct > 0) {
+    char.burnDurationBonus = burnDurPct;
+  }
+  if (flameRangePct > 0) {
+    weapon.stats.range *= 1 + flameRangePct / 100;
+  }
+  if (burnStackFlat > 0) {
+    char.burnStackCap = burnStackFlat;
   }
 }
 

@@ -139,10 +139,10 @@ describe('Weapon creation', () => {
     expect(machineGun.stats.range).toBe(150);
 
     const electric = createWeapon(WeaponTypeId.ElectricWave);
-    expect(electric.stats.damage).toBe(12);
-    expect(electric.stats.chainCount).toBe(3);
+    expect(electric.stats.damage).toBe(8);
+    expect(electric.stats.chainCount).toBe(1);
     expect(electric.stats.releaseTime).toBe(0.3);
-    expect(electric.stats.chainRange).toBe(300);
+    expect(electric.stats.chainRange).toBe(50);
     expect(electric.stats.magazineCapacity).toBe(Infinity);
     expect(electric.stats.bulletCount).toBe(0);
 
@@ -366,11 +366,11 @@ describe('Auto-aim target selection', () => {
 });
 
 describe('Auxiliary weapon base stat buffs', () => {
-  it('missile base stats: 2s launch interval, 350 range, explosive radius 55', () => {
+  it('missile base stats: 2s launch interval, 350 range, explosive radius 110', () => {
     const missile = createAuxiliaryWeapon(AuxiliaryWeaponType.Missile);
     expect(missile.stats.cooldown).toBe(0);
     expect(missile.stats.placementCooldown).toBe(2);
-    expect(missile.stats.explosionRadius).toBe(55);
+    expect(missile.stats.explosionRadius).toBe(110);
     expect(missile.stats.range).toBe(350);
   });
 
@@ -381,10 +381,10 @@ describe('Auxiliary weapon base stat buffs', () => {
     expect(ww.stats.range).toBe(40);
   });
 
-  it('turret base stats: damage 24, fire rate 3/s, 2 placements, 220 range, explosive', () => {
+  it('turret base stats: damage 24, fire rate 0.5/s, 2 placements, 220 range, explosive', () => {
     const turret = createAuxiliaryWeapon(AuxiliaryWeaponType.Turret);
     expect(turret.stats.damage).toBe(24);
-    expect(turret.stats.turretFireRate).toBe(3);
+    expect(turret.stats.turretFireRate).toBe(0.5);
     expect(turret.stats.placementCooldown).toBe(0.6);
     expect(turret.stats.range).toBe(220);
     expect(turret.stats.explosionRadius).toBe(45);
@@ -446,9 +446,10 @@ describe('ElectricWave chain behavior', () => {
 
   it('hits the initial target then chains through nearby enemies without spawning bullets', () => {
     const e1 = makeEnemy('e1', 1000 + 80, 1000);
-    const e2 = makeEnemy('e2', 1000 + 180, 1000); // 距 e1 100 < chainRange
-    const e3 = makeEnemy('e3', 1000 + 280, 1000); // 距 e2 100 < chainRange
+    const e2 = makeEnemy('e2', 1000 + 105, 1000); // 距 e1 25 < chainRange 50
+    const e3 = makeEnemy('e3', 1000 + 130, 1000); // 距 e2 25 < chainRange 50
     const state = makeElectricState([e1, e2, e3]);
+    state.character.mainWeapon.stats.chainCount = 3; // 覆盖基础 1，验证多跳
     updateGame(state, 1 / 60, { x: 0, y: 0 });
     expect(e1.health).toBeLessThan(e1.maxHealth);
     expect(e2.health).toBeLessThan(e2.maxHealth);
@@ -478,15 +479,15 @@ describe('ElectricWave chain behavior', () => {
   });
 
   it('never chains back to an already-hit enemy within a single attack', () => {
-    // 三个怪彼此距离 100（< chainRange），连锁耗尽后即使 e2 身边只剩已命中的 e1，也不会回头打 e1
+    // 三个怪彼此距离 25（< chainRange 50），连锁耗尽后即使 e2 身边只剩已命中的 e1，也不会回头打 e1
     const e1 = makeEnemy('e1', 1000 + 80, 1000);
-    const e2 = makeEnemy('e2', 1000 + 180, 1000);
-    const e3 = makeEnemy('e3', 1000 + 280, 1000);
+    const e2 = makeEnemy('e2', 1000 + 105, 1000);
+    const e3 = makeEnemy('e3', 1000 + 130, 1000);
     const state = makeElectricState([e1, e2, e3]);
     state.character.mainWeapon.stats.chainCount = 5; // 跳数多于敌人数
     state.character.mainWeapon.stats.damage = 10;
     updateGame(state, 1 / 60, { x: 0, y: 0 });
-    // 一次攻击最多命中 3 个敌人，每个只被打一次（12 伤害基础值下不会双倍掉血）
+    // 一次攻击最多命中 3 个敌人，每个只被打一次（10 伤害基础值下不会双倍掉血）
     expect(e1.maxHealth - e1.health).toBe(10);
     expect(e2.maxHealth - e2.health).toBe(10);
     expect(e3.maxHealth - e3.health).toBe(10);
@@ -494,12 +495,13 @@ describe('ElectricWave chain behavior', () => {
 
   it('starts the chain from the densest cluster, not the closest enemy', () => {
     const state = makeElectricState([]);
-    // 玩家身后聚一团（彼此 < 250），身前一个孤立怪（离团 > 250、在射程内）
+    // 玩家身后聚一团（彼此 < 50），身前一个孤立怪（离团 > 250、在射程内）
     const lone = makeEnemy('lone', 1000 + 240, 1000);
     const g1 = makeEnemy('g1', 1000 - 140, 1000);
-    const g2 = makeEnemy('g2', 1000 - 160, 1000 + 60);
-    const g3 = makeEnemy('g3', 1000 - 120, 1000 - 40);
+    const g2 = makeEnemy('g2', 1000 - 160, 1000 + 20);
+    const g3 = makeEnemy('g3', 1000 - 135, 1000 + 35);
     state.enemies = [lone, g1, g2, g3];
+    state.character.mainWeapon.stats.chainCount = 5;
     updateGame(state, 1 / 60, { x: 0, y: 0 });
     // 孤立怪不被命中，密集团从团中心起跳全部命中
     expect(lone.health).toBe(lone.maxHealth);

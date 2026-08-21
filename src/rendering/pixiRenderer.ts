@@ -210,7 +210,7 @@ const PROJECTILE_COLORS: Record<string, number> = {
   missile: 0xff7043,
   aux_laser_gun: 0x00e5ff,
   sword_energy: 0x9fffff,
-  turret: 0xffeb3b,
+  turret: 0xff6d00,
 };
 
 const PROJECTILE_RADIUS: Record<string, number> = {
@@ -221,7 +221,7 @@ const PROJECTILE_RADIUS: Record<string, number> = {
   missile: 6,
   aux_laser_gun: 3,
   sword_energy: 6,
-  turret: 3,
+  turret: 5,
 };
 
 const ENEMY_BURST_COLORS: Record<string, number> = {
@@ -668,8 +668,7 @@ export class PixiRenderer {
   private readonly turrets = new Map<string, TurretGfx>();
   private readonly landMines = new Map<string, { gfx: Graphics; armed: boolean; radius: number }>();
   private readonly slashes = new Map<string, SlashGfx>();
-  private readonly beams = new Map<string, Graphics>();
-  private prevBeamKeys = new Set<string>();
+  private readonly beamGfx = new Graphics();
   private readonly damages = new Map<string, Text>();
   private readonly projectiles = new Map<string, Particle>();
   private readonly blades = new Map<string, Graphics>();
@@ -777,6 +776,7 @@ export class PixiRenderer {
       this.bladeC,
     );
 
+    this.beamC.addChild(this.beamGfx);
     this.app.stage.addChild(this.gridGfx, this.cameraGroup, this.hudC, this.menuC, this.flashGfx);
     this.menuC.visible = false;
     this.flashGfx.visible = false;
@@ -912,7 +912,12 @@ export class PixiRenderer {
 
   private syncDamageNumbers(numbers: DamageNumber[]): void {
     const seen = new Set<string>();
+    // 最多渲染 50 个伤害数字，降低 Text 创建/销毁开销
+    const maxNumbers = 50;
+    let drawn = 0;
     for (const dn of numbers) {
+      if (drawn >= maxNumbers) break;
+      drawn++;
       const key = `${dn.position.x.toFixed(0)},${dn.position.y.toFixed(0)},${dn.value}`;
       seen.add(key);
       let txt = this.damages.get(key);
@@ -1034,10 +1039,9 @@ export class PixiRenderer {
       let tg = this.turrets.get(t.id);
       if (!tg) {
         const rangeRing = new Graphics();
-        // 半透明攻击范围圈 + 旋转扫描线
+        // 半透明攻击范围圈
         rangeRing.circle(0, 0, t.range).fill({ color: 0xff9800, alpha: 0.06 });
         rangeRing.circle(0, 0, t.range).stroke({ color: 0xff9800, width: 1, alpha: 0.3 });
-        rangeRing.circle(0, 0, t.range - 6).stroke({ color: 0xffc107, width: 1, alpha: 0.12 });
         const gfx = new Graphics();
         gfx.rect(-6, -6, 12, 12).fill({ color: 0xff9800 }).stroke({ color: 0xffc107, width: 2 });
         const label = makeText('炮', { fontFamily: MONO, fontSize: 8, fill: 0xffffff }, 0.5, 0.5);
@@ -1049,11 +1053,6 @@ export class PixiRenderer {
         this.turretC.addChild(rangeRing);
       }
       tg.gfx.position.set(t.position.x, t.position.y);
-      // 范围环扫描线：随时间旋转一圈
-      const rot = ((performance.now() / 1000) % 4 / 4) * Math.PI * 2;
-      const rx = Math.cos(rot) * t.range;
-      const ry = Math.sin(rot) * t.range;
-      tg.rangeRing.moveTo(0, 0).lineTo(rx, ry).stroke({ color: 0xffc107, width: 1, alpha: 0.35 });
     }
     for (const [id, tg] of this.turrets) {
       if (!seen.has(id)) {
@@ -1199,66 +1198,42 @@ export class PixiRenderer {
   }
 
   private syncBeams(effects: BeamEffect[]): void {
-    const seen = new Set<string>();
-    for (const ef of effects) {
-      const key = `${ef.origin.x.toFixed(1)},${ef.origin.y.toFixed(1)},${ef.end.x.toFixed(1)},${ef.end.y.toFixed(1)}`;
-      seen.add(key);
+    const g = this.beamGfx;
+    g.clear();
+    // 最多渲染 80 条，超过的部分丢弃
+    const maxBeams = 80;
+    const step = effects.length > maxBeams ? Math.ceil(effects.length / maxBeams) : 1;
+    let drawn = 0;
+    for (let i = 0; i < effects.length; i += step) {
+      const ef = effects[i];
+      if (drawn >= maxBeams) break;
+      drawn++;
+      const alpha = clamp01(ef.timer / 0.25);
       const colorNum = /^#([0-9a-f]{6})$/i.test(ef.color)
         ? parseInt(ef.color.slice(1), 16)
         : 0x00e5ff;
-      let g = this.beams.get(key);
-      const isNew = !g;
-      if (!g) {
-        g = new Graphics();
-        // 折线闪电：沿直线方向做若干次随机垂直抖动（创建时固定，存续期间稳定）
-        const dx = ef.end.x - ef.origin.x;
-        const dy = ef.end.y - ef.origin.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const nx = -dy / len;
-        const ny = dx / len;
-        const segs = 5;
-        const pts: number[] = [];
-        for (let s = 0; s <= segs; s++) {
-          const t = s / segs;
-          const perp = s === 0 || s === segs ? 0 : (Math.random() - 0.5) * 10;
-          pts.push(ef.origin.x + dx * t + nx * perp, ef.origin.y + dy * t + ny * perp);
-        }
-        // 外圈辉光（宽、半透明）
-        g.moveTo(pts[0], pts[1]);
-        for (let s = 1; s <= segs; s++) g.lineTo(pts[s * 2], pts[s * 2 + 1]);
-        g.stroke({ color: colorNum, width: ef.width * 2.2, alpha: 0.35 });
-        // 主体
-        g.moveTo(pts[0], pts[1]);
-        for (let s = 1; s <= segs; s++) g.lineTo(pts[s * 2], pts[s * 2 + 1]);
-        g.stroke({ color: colorNum, width: ef.width });
-        // 亮核
-        g.moveTo(pts[0], pts[1]);
-        for (let s = 1; s <= segs; s++) g.lineTo(pts[s * 2], pts[s * 2 + 1]);
-        g.stroke({
-          color: 0xffffff, width: Math.max(2, ef.width * 0.35),
-        });
-        this.beams.set(key, g);
-        this.beamC.addChild(g);
+      const dx = ef.end.x - ef.origin.x;
+      const dy = ef.end.y - ef.origin.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const segs = 5;
+      const pts: number[] = [];
+      for (let s = 0; s <= segs; s++) {
+        const t = s / segs;
+        const perp = s === 0 || s === segs ? 0 : (Math.random() - 0.5) * 10;
+        pts.push(ef.origin.x + dx * t + nx * perp, ef.origin.y + dy * t + ny * perp);
       }
-      g.alpha = clamp01(ef.timer / 0.25);
-      // 新电弧 → 两端迸放电火花，让连锁肉眼可见
-      if (isNew && !this.prevBeamKeys.has(key)) {
-        const spark = { x: ef.end.x, y: ef.end.y };
-        this.fx.burst({
-          count: 8, x: spark.x, y: spark.y, color: colorNum, angle: Math.random() * Math.PI * 2,
-          spread: Math.PI * 2, speedMin: 50, speedMax: 200, sizeMin: 1.5, sizeMax: 4,
-          lifeMin: 0.15, lifeMax: 0.45, drag: 0.9, additive: true,
-        });
-      }
+      g.moveTo(pts[0], pts[1]);
+      for (let s = 1; s <= segs; s++) g.lineTo(pts[s * 2], pts[s * 2 + 1]);
+      g.stroke({ color: colorNum, width: ef.width * 2.2, alpha: alpha * 0.35 });
+      g.moveTo(pts[0], pts[1]);
+      for (let s = 1; s <= segs; s++) g.lineTo(pts[s * 2], pts[s * 2 + 1]);
+      g.stroke({ color: colorNum, width: ef.width, alpha });
+      g.moveTo(pts[0], pts[1]);
+      for (let s = 1; s <= segs; s++) g.lineTo(pts[s * 2], pts[s * 2 + 1]);
+      g.stroke({ color: 0xffffff, width: Math.max(2, ef.width * 0.35), alpha });
     }
-    for (const [key, g] of this.beams) {
-      if (!seen.has(key)) {
-        this.beamC.removeChild(g);
-        g.destroy();
-        this.beams.delete(key);
-      }
-    }
-    this.prevBeamKeys = seen;
   }
 
   private syncWindWheels(state: GameState): void {

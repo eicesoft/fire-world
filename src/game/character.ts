@@ -40,6 +40,9 @@ export function createCharacter(weaponType: WeaponTypeId): Character {
     invincibleTimer: 0,
     critChance: 0,
     doubleStrikeChance: 0,
+    burnDamageBonus: 0,
+    burnDurationBonus: 0,
+    burnStackCap: 0,
   };
 }
 

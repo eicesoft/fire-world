@@ -268,21 +268,26 @@ function updateTurrets(state: GameState, dt: number): void {
     if (!nearest) continue;
 
     const angle = angleBetween(turret.position, nearest.position);
-    const proj: Projectile = {
-      id: `turret_proj_${nextEntityId++}`,
-      position: { x: turret.position.x, y: turret.position.y },
-      velocity: { x: Math.cos(angle) * 400, y: Math.sin(angle) * 400 },
-      damage: turret.damage,
-      penetration: 1,
-      hitEnemies: new Set<string>(),
-      ownerId: 'character',
-      lifetime: 1,
-      maxLifetime: 1,
-      weaponType: 'turret' as any,
-      explosionRadius: turret.explosionRadius,
-      projectileSize: 3,
-    };
-    state.projectiles.push(proj);
+    const spread = 0.2; // 扇形扩散弧度
+    const bulletCount = 3;
+    for (let k = 0; k < bulletCount; k++) {
+      const a = angle + (k - (bulletCount - 1) / 2) * spread;
+      const proj: Projectile = {
+        id: `turret_proj_${nextEntityId++}`,
+        position: { x: turret.position.x, y: turret.position.y },
+        velocity: { x: Math.cos(a) * 600, y: Math.sin(a) * 600 },
+        damage: turret.damage,
+        penetration: 1,
+        hitEnemies: new Set<string>(),
+        ownerId: 'character',
+        lifetime: 1,
+        maxLifetime: 1,
+        weaponType: 'turret' as any,
+        explosionRadius: turret.explosionRadius,
+        projectileSize: 3,
+      };
+      state.projectiles.push(proj);
+    }
     turret.fireCooldown = 1 / turret.fireRate;
   }
 }

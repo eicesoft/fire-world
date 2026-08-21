@@ -424,9 +424,20 @@ function updateProjectiles(state: GameState, dt: number): void {
         proj.hitEnemies.add(enemy.id);
 
         if (proj.weaponType === WeaponTypeId.Flamethrower) {
-          enemy.burnDamage = Math.max(enemy.burnDamage, proj.damage * 0.2);
-          const burnDuration = Math.max(1, 1 + state.character.mainWeapon.stats.range / 100);
+          const char = state.character;
+          const baseBurn = proj.damage * 0.2 * (1 + (char.burnDamageBonus || 0) / 100);
+          const burnCap = Math.max(1, char.burnStackCap || 1);
+          if (char.burnStackCap > 0) {
+            // 叠加模式：累加，不超过上限
+            enemy.burnDamage = Math.min(enemy.burnDamage + baseBurn, baseBurn * burnCap);
+          } else {
+            enemy.burnDamage = Math.max(enemy.burnDamage, baseBurn);
+          }
+          const baseDur = Math.max(1, 1 + char.mainWeapon.stats.range / 100);
+          const durBonus = (char.burnDurationBonus || 0) / 100;
+          const burnDuration = baseDur * (1 + durBonus);
           enemy.burnTimer = Math.max(enemy.burnTimer, burnDuration);
+          enemy.burnStack = Math.min(enemy.burnStack + 1, burnCap);
         }
 
         if (proj.explosionRadius > 0) {
@@ -516,10 +527,13 @@ function updateSlashEffects(state: GameState, dt: number): void {
 }
 
 function updateBeamEffects(state: GameState, dt: number): void {
-  for (let i = state.beamEffects.length - 1; i >= 0; i--) {
-    state.beamEffects[i].timer -= dt;
-    if (state.beamEffects[i].timer <= 0) state.beamEffects.splice(i, 1);
+  const beams = state.beamEffects;
+  for (let i = beams.length - 1; i >= 0; i--) {
+    beams[i].timer -= dt;
+    if (beams[i].timer <= 0) beams.splice(i, 1);
   }
+  // 限制 beam 数量，防止连锁范围大时爆内存
+  if (beams.length > 200) beams.splice(0, beams.length - 200);
 }
 
 function updateDamageNumbers(state: GameState, dt: number): void {
